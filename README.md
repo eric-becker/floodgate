@@ -35,7 +35,58 @@ Each message produces one outcome:
 | `[PASSTHRU]` | Channel exempt by policy — unchanged |
 | `[WARN]` | Payload parse failure — unchanged |
 
-## Quick Start
+## Deployment
+
+### Docker (existing EMQX install)
+
+If you already have EMQX running, run floodgate as a standalone container on the same host:
+
+```bash
+git clone https://github.com/eric-becker/floodgate
+cd floodgate
+cp config.yaml my-config.yaml   # edit to taste
+docker build -t floodgate .     # protobufs are downloaded automatically during build
+docker run -d \
+  --name floodgate \
+  --restart unless-stopped \
+  -v "$(pwd)/my-config.yaml:/app/config.yaml:ro" \
+  -p 9000:9000 \
+  floodgate
+```
+
+Then register floodgate as an ExHook in EMQX. Get an API token first:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:18083/api/v5/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"your_password"}' | jq -r .token)
+```
+
+Register the ExHook (replace `YOUR_HOST_IP` with the IP floodgate is reachable on from EMQX):
+
+```bash
+curl -X POST http://localhost:18083/api/v5/exhooks \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "floodgate",
+    "url": "http://YOUR_HOST_IP:9000",
+    "auto_reconnect": "60s",
+    "failed_action": "ignore"
+  }'
+```
+
+If floodgate is on the same Docker network as EMQX, use the container name instead of an IP:
+`"url": "http://floodgate:9000"`
+
+Verify registration in the EMQX dashboard under **Management → ExHook** or:
+
+```bash
+curl -s http://localhost:18083/api/v5/exhooks/floodgate \
+  -H "Authorization: Bearer $TOKEN" | jq .status
+```
+
+### Docker Compose (floodgate + EMQX together)
 
 ```bash
 git clone https://github.com/eric-becker/floodgate
@@ -43,9 +94,13 @@ cd floodgate
 docker compose up --build -d
 ```
 
-Register the ExHook in EMQX after startup (curl command in [docker-compose.yaml](docker-compose.yaml) header).
+See [docker-compose.yaml](docker-compose.yaml) for the ExHook registration curl command to run after startup.
 
-## Installation
+### Kubernetes
+
+See [k8s/](k8s/) — Deployment, Service, and ConfigMap. Register the ExHook at `http://floodgate:9000` after applying.
+
+### Source install
 
 **Prerequisites:** Python 3.11+, `protoc`, `grpc_tools`
 
