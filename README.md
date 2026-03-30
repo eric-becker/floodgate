@@ -2,8 +2,6 @@
 
 Zero-hop MQTT anti-flood service for Meshtastic — intercepts MQTT PUBLISH events via EMQX ExHook (gRPC) and sets `MeshPacket.hop_limit=0` in-flight before delivery to subscribers.
 
-> **Disclaimer:** floodgate is designed to integrate with [Meshtastic's MQTT integration](https://meshtastic.org/docs/software/integrations/mqtt/) and attempts to remain compatible with it in good faith. It is not affiliated with, endorsed by, or officially associated with the Meshtastic project. Meshtastic® is a registered trademark of Meshtastic LLC.
-
 ---
 
 ## The Problem
