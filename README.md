@@ -19,7 +19,7 @@ Gateway (LoRa uplink)
      EMQX  →  Subscribers
 ```
 
-Unlike a standard MQTT subscriber, floodgate modifies payloads in-flight — all subscribers receive the zeroed packet transparently. Both protobuf (`/e/`) and JSON (`/json/`) topic formats are supported.
+Unlike a standard MQTT subscriber, floodgate modifies payloads in-flight — all subscribers receive the zeroed packet transparently. Meshtastic gateways use the protobuf (`/e/`) topic for LoRa downlink. The JSON (`/json/`) topic is a human-readable mirror that some clients publish alongside for monitoring tools like MQTT Explorer — floodgate zero-hops both for consistency.
 
 ```
 Before:  hop_limit: 3  hop_start: 3
