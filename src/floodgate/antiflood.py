@@ -154,7 +154,6 @@ def parse_meshtastic_topic(topic: str) -> Optional[Tuple[str, str]]:
 
 def _peek_meta(encoding: str, payload: bytes) -> dict:
     """Parse packet metadata without modifying the payload. Best-effort."""
-    _load_protos()
     if encoding == "json":
         try:
             data = _json.loads(payload)
@@ -168,6 +167,7 @@ def _peek_meta(encoding: str, payload: bytes) -> dict:
         except Exception:
             return {}
     else:
+        _load_protos()
         try:
             envelope = _mqtt_pb2.ServiceEnvelope()
             envelope.ParseFromString(payload)
