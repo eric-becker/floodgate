@@ -162,6 +162,12 @@ pytest tests/ -q   # no protobufs required — protobuf imports are mocked
 [STATS]    zerohop=142  noop=3  passthru=0  warn=0  (last 60s)
 ```
 
+## Legal
+
+This project is not affiliated with, endorsed by, or officially associated with the Meshtastic project or Meshtastic LLC. Meshtastic® is a registered trademark of Meshtastic LLC.
+
+floodgate is independent software that interoperates with Meshtastic's MQTT packet format. Use of the Meshtastic name is solely for the purpose of identifying compatibility.
+
 ## License
 
 GPL v3.0 — see [LICENSE](LICENSE).
