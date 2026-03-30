@@ -167,8 +167,8 @@ def _peek_meta(encoding: str, payload: bytes) -> dict:
         except Exception:
             return {}
     else:
-        _load_protos()
         try:
+            _load_protos()
             envelope = _mqtt_pb2.ServiceEnvelope()
             envelope.ParseFromString(payload)
             if envelope.HasField("packet"):
