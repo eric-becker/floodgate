@@ -1,0 +1,32 @@
+# Local dev: EMQX + floodgate. After startup, register the ExHook:
+#   TOKEN=$(curl -s -X POST http://localhost:18083/api/v5/login \
+#     -H 'Content-Type: application/json' \
+#     -d '{"username":"admin","password":"public"}' | jq -r .token)
+#   curl -X POST http://localhost:18083/api/v5/exhooks \
+#     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+#     -d '{"name":"floodgate","url":"http://floodgate:9000","auto_reconnect":"60s","failed_action":"ignore"}'
+
+services:
+  emqx:
+    image: emqx/emqx:5.8.7
+    ports:
+      - "1883:1883"     # MQTT
+      - "18083:18083"   # Dashboard / REST API
+    environment:
+      EMQX_NAME: "emqx"
+    volumes:
+      - emqx-data:/opt/emqx/data
+
+  floodgate:
+    build: .
+    ports:
+      - "9000:9000"     # ExHook gRPC
+    environment:
+      FLOODGATE_CONFIG: /app/config.yaml
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      - emqx
+
+volumes:
+  emqx-data:

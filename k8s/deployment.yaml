@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: floodgate
+  labels:
+    app: floodgate
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: floodgate
+  template:
+    metadata:
+      labels:
+        app: floodgate
+    spec:
+      containers:
+        - name: floodgate
+          image: eric-becker/floodgate:latest
+          ports:
+            - containerPort: 9000
+              protocol: TCP
+          env:
+            - name: FLOODGATE_CONFIG
+              value: /etc/floodgate/config.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /etc/floodgate
+              readOnly: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: config
+          configMap:
+            name: floodgate-config
