@@ -1,14 +1,19 @@
-// Copyright (c) 2020-2025 EMQ Technologies Co., Ltd. All Rights Reserved.
+// Copyright (c) 2020-2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 // Licensed under the Apache License, Version 2.0
-// Source: https://github.com/emqx/emqx/blob/v5.8.7/apps/emqx_exhook/priv/protos/exhook.proto
+// Source: https://github.com/emqx/emqx/blob/release-60/apps/emqx_exhook/priv/protos/exhook.proto
+//
+// v3: EMQX 5.9.0+ / EMQX 6.x
+// v2: EMQX 5.0–5.8.x
 
 syntax = "proto3";
 
+option csharp_namespace = "Emqx.Exhook.V3";
 option go_package = "emqx.io/grpc/exhook";
 option java_multiple_files = true;
 option java_package = "io.emqx.exhook";
+option java_outer_classname = "EmqxExHookProto";
 
-package emqx.exhook.v2;
+package emqx.exhook.v3;
 
 service HookProvider {
   rpc OnProviderLoaded(ProviderLoadedRequest) returns (LoadedResponse) {};
@@ -34,45 +39,233 @@ service HookProvider {
   rpc OnMessageAcked(MessageAckedRequest) returns (EmptySuccess) {};
 }
 
-message ProviderLoadedRequest { BrokerInfo broker = 1; RequestMeta meta = 2; }
-message ProviderUnloadedRequest { RequestMeta meta = 1; }
-message ClientConnectRequest { ConnInfo conninfo = 1; repeated Property props = 2; RequestMeta meta = 3; }
-message ClientConnackRequest { ConnInfo conninfo = 1; string result_code = 2; repeated Property props = 3; RequestMeta meta = 4; }
-message ClientConnectedRequest { ClientInfo clientinfo = 1; RequestMeta meta = 2; }
-message ClientDisconnectedRequest { ClientInfo clientinfo = 1; string reason = 2; RequestMeta meta = 3; }
-message ClientAuthenticateRequest { ClientInfo clientinfo = 1; bool result = 2; RequestMeta meta = 3; }
+message ProviderLoadedRequest {
+  BrokerInfo broker = 1;
+  RequestMeta meta = 2;
+}
+
+message ProviderUnloadedRequest {
+  RequestMeta meta = 1;
+}
+
+message ClientConnectRequest {
+  ConnInfo conninfo = 1;
+  repeated Property props = 2;
+  RequestMeta meta = 3;
+  repeated Property user_props = 4;
+}
+
+message ClientConnackRequest {
+  ConnInfo conninfo = 1;
+  string result_code = 2;
+  repeated Property props = 3;
+  RequestMeta meta = 4;
+  repeated Property user_props = 5;
+}
+
+message ClientConnectedRequest {
+  ClientInfo clientinfo = 1;
+  RequestMeta meta = 2;
+}
+
+message ClientDisconnectedRequest {
+  ClientInfo clientinfo = 1;
+  string reason = 2;
+  RequestMeta meta = 3;
+}
+
+message ClientAuthenticateRequest {
+  ClientInfo clientinfo = 1;
+  bool result = 2;
+  RequestMeta meta = 3;
+}
+
 message ClientAuthorizeRequest {
   ClientInfo clientinfo = 1;
-  enum AuthorizeReqType { PUBLISH = 0; SUBSCRIBE = 1; }
-  AuthorizeReqType type = 2; string topic = 3; bool result = 4; RequestMeta meta = 5;
+  enum AuthorizeReqType {
+    PUBLISH = 0;
+    SUBSCRIBE = 1;
+  }
+  AuthorizeReqType type = 2;
+  string topic = 3;
+  bool result = 4;
+  RequestMeta meta = 5;
 }
-message ClientSubscribeRequest { ClientInfo clientinfo = 1; repeated Property props = 2; repeated TopicFilter topic_filters = 3; RequestMeta meta = 4; }
-message ClientUnsubscribeRequest { ClientInfo clientinfo = 1; repeated Property props = 2; repeated TopicFilter topic_filters = 3; RequestMeta meta = 4; }
-message SessionCreatedRequest { ClientInfo clientinfo = 1; RequestMeta meta = 2; }
-message SessionSubscribedRequest { ClientInfo clientinfo = 1; string topic = 2; SubOpts subopts = 3; RequestMeta meta = 4; }
-message SessionUnsubscribedRequest { ClientInfo clientinfo = 1; string topic = 2; RequestMeta meta = 3; }
-message SessionResumedRequest { ClientInfo clientinfo = 1; RequestMeta meta = 2; }
-message SessionDiscardedRequest { ClientInfo clientinfo = 1; RequestMeta meta = 2; }
-message SessionTakenoverRequest { ClientInfo clientinfo = 1; RequestMeta meta = 2; }
-message SessionTerminatedRequest { ClientInfo clientinfo = 1; string reason = 2; RequestMeta meta = 3; }
-message MessagePublishRequest { Message message = 1; RequestMeta meta = 2; }
-message MessageDeliveredRequest { ClientInfo clientinfo = 1; Message message = 2; RequestMeta meta = 3; }
-message MessageDroppedRequest { Message message = 1; string reason = 2; RequestMeta meta = 3; }
-message MessageAckedRequest { ClientInfo clientinfo = 1; Message message = 2; RequestMeta meta = 3; }
 
-message LoadedResponse { repeated HookSpec hooks = 1; }
-message ValuedResponse {
-  enum ResponsedType { CONTINUE = 0; IGNORE = 1; STOP_AND_RETURN = 2; }
-  ResponsedType type = 1;
-  oneof value { bool bool_result = 3; Message message = 4; }
+message ClientSubscribeRequest {
+  ClientInfo clientinfo = 1;
+  repeated Property props = 2;
+  repeated TopicFilter topic_filters = 3;
+  RequestMeta meta = 4;
+  repeated Property user_props = 5;
 }
-message EmptySuccess { }
-message BrokerInfo { string version = 1; string sysdescr = 2; int64 uptime = 3; string datetime = 4; }
-message HookSpec { string name = 1; repeated string topics = 2; }
-message ConnInfo { string node = 1; string clientid = 2; string username = 3; string peerhost = 4; uint32 sockport = 5; string proto_name = 6; string proto_ver = 7; uint32 keepalive = 8; uint32 peerport = 9; }
-message ClientInfo { string node = 1; string clientid = 2; string username = 3; string password = 4; string peerhost = 5; uint32 sockport = 6; string protocol = 7; string mountpoint = 8; bool is_superuser = 9; bool anonymous = 10; string cn = 11; string dn = 12; uint32 peerport = 13; }
-message Message { string node = 1; string id = 2; uint32 qos = 3; string from = 4; string topic = 5; bytes payload = 6; uint64 timestamp = 7; map<string, string> headers = 8; }
-message Property { string name = 1; string value = 2; }
-message TopicFilter { string name = 1; reserved 2; reserved "qos"; SubOpts subopts = 3; }
-message SubOpts { uint32 qos = 1; reserved 2; reserved "share"; uint32 rh = 3; uint32 rap = 4; uint32 nl = 5; }
-message RequestMeta { string node = 1; string version = 2; string sysdescr = 3; string cluster_name = 4; }
+
+message ClientUnsubscribeRequest {
+  ClientInfo clientinfo = 1;
+  repeated Property props = 2;
+  repeated TopicFilter topic_filters = 3;
+  RequestMeta meta = 4;
+  repeated Property user_props = 5;
+}
+
+message SessionCreatedRequest {
+  ClientInfo clientinfo = 1;
+  RequestMeta meta = 2;
+}
+
+message SessionSubscribedRequest {
+  ClientInfo clientinfo = 1;
+  string topic = 2;
+  SubOpts subopts = 3;
+  RequestMeta meta = 4;
+}
+
+message SessionUnsubscribedRequest {
+  ClientInfo clientinfo = 1;
+  string topic = 2;
+  RequestMeta meta = 3;
+}
+
+message SessionResumedRequest {
+  ClientInfo clientinfo = 1;
+  RequestMeta meta = 2;
+}
+
+message SessionDiscardedRequest {
+  ClientInfo clientinfo = 1;
+  RequestMeta meta = 2;
+}
+
+message SessionTakenoverRequest {
+  ClientInfo clientinfo = 1;
+  RequestMeta meta = 2;
+}
+
+message SessionTerminatedRequest {
+  ClientInfo clientinfo = 1;
+  string reason = 2;
+  RequestMeta meta = 3;
+}
+
+message MessagePublishRequest {
+  Message message = 1;
+  RequestMeta meta = 2;
+  repeated Property props = 3;
+  repeated Property user_props = 4;
+}
+
+message MessageDeliveredRequest {
+  ClientInfo clientinfo = 1;
+  Message message = 2;
+  RequestMeta meta = 3;
+}
+
+message MessageDroppedRequest {
+  Message message = 1;
+  string reason = 2;
+  RequestMeta meta = 3;
+}
+
+message MessageAckedRequest {
+  ClientInfo clientinfo = 1;
+  Message message = 2;
+  RequestMeta meta = 3;
+}
+
+message LoadedResponse {
+  repeated HookSpec hooks = 1;
+}
+
+message ValuedResponse {
+  enum ResponsedType {
+    CONTINUE = 0;
+    IGNORE = 1;
+    STOP_AND_RETURN = 2;
+  }
+  ResponsedType type = 1;
+  oneof value {
+    bool bool_result = 3;
+    Message message = 4;
+  }
+}
+
+message EmptySuccess {}
+
+message BrokerInfo {
+  string version = 1;
+  string sysdescr = 2;
+  int64 uptime = 3;
+  string datetime = 4;
+}
+
+message HookSpec {
+  string name = 1;
+  repeated string topics = 2;
+}
+
+message ConnInfo {
+  string node = 1;
+  string clientid = 2;
+  string username = 3;
+  string peerhost = 4;
+  uint32 sockport = 5;
+  string proto_name = 6;
+  string proto_ver = 7;
+  uint32 keepalive = 8;
+  uint32 peerport = 9;
+}
+
+message ClientInfo {
+  string node = 1;
+  string clientid = 2;
+  string username = 3;
+  string password = 4;
+  string peerhost = 5;
+  uint32 sockport = 6;
+  string protocol = 7;
+  string mountpoint = 8;
+  bool is_superuser = 9;
+  bool anonymous = 10;
+  string cn = 11;
+  string dn = 12;
+  uint32 peerport = 13;
+}
+
+message Message {
+  string node = 1;
+  string id = 2;
+  uint32 qos = 3;
+  string from = 4;
+  string topic = 5;
+  bytes payload = 6;
+  uint64 timestamp = 7;
+  map<string, string> headers = 8;
+}
+
+message Property {
+  string name = 1;
+  string value = 2;
+}
+
+message TopicFilter {
+  string name = 1;
+  reserved 2;
+  reserved "qos";
+  SubOpts subopts = 3;
+}
+
+message SubOpts {
+  uint32 qos = 1;
+  reserved 2;
+  reserved "share";
+  uint32 rh = 3;
+  uint32 rap = 4;
+  uint32 nl = 5;
+}
+
+message RequestMeta {
+  string node = 1;
+  string version = 2;
+  string sysdescr = 3;
+  string cluster_name = 4;
+}
