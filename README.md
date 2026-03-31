@@ -2,6 +2,14 @@
 
 Zero-hop MQTT anti-flood service for self-hosted [EMQX](https://www.emqx.io/) brokers serving [Meshtastic](https://meshtastic.org/) networks. Intercepts MQTT PUBLISH events via [EMQX ExHook](https://www.emqx.io/docs/en/latest/extensions/exhook.html) (gRPC) and sets `MeshPacket.hop_limit=0` in-flight before delivery to subscribers, preventing LoRa rebroadcast floods when gateways downlink MQTT packets.
 
+## Why
+
+Meshtastic's official public broker enforces a [zero-hop policy](https://meshtastic.org/docs/software/integrations/mqtt/#zero-hop-policy): packets delivered from the broker to gateway nodes are zeroed before downlink so they don't rebroadcast across the local LoRa mesh. This prevents internet-scale MQTT traffic from flooding regional radio networks.
+
+**Private brokers don't enforce this by default.** The Meshtastic docs [explicitly warn](https://meshtastic.org/docs/software/integrations/mqtt/#using-private-brokers) that using default encryption keys on private brokers is discouraged because they lack the zero-hop policy enforcement of the public broker — packets downlinked from a private broker can flood the local mesh at full hop count.
+
+floodgate fills this gap. It runs alongside your self-hosted EMQX and enforces zero-hop in-flight via the [ExHook gRPC interface](https://www.emqx.io/docs/en/latest/extensions/exhook.html), giving your private broker the same protection the public broker provides — without requiring any changes to your clients, gateways, or EMQX configuration beyond registering the ExHook.
+
 ## How It Works
 
 ```
