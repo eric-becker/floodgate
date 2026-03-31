@@ -36,4 +36,6 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 9000
 
+USER nobody
+
 ENTRYPOINT ["python", "-m", "floodgate"]

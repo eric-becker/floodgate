@@ -10,7 +10,7 @@ readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
 dependencies = [
-    "grpcio>=1.60.0",
+    "grpcio>=1.80.0",
     "protobuf>=4.25.0",
     "paho-mqtt>=2.0.0",
     "pyyaml>=6.0",
@@ -18,7 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "grpcio-tools>=1.60.0",
+    "grpcio-tools>=1.80.0",
     "pytest>=7.0",
 ]
 

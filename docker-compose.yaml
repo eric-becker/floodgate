@@ -19,8 +19,6 @@ services:
 
   floodgate:
     build: .
-    ports:
-      - "9000:9000"     # ExHook gRPC
     environment:
       FLOODGATE_CONFIG: /app/config.yaml
     volumes:
