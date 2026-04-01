@@ -183,6 +183,7 @@ def serve(config: dict):
     _load_exhook_protos()
 
     port           = config.get("grpc_port", 9000)
+    health_port    = config.get("health_port", 8080)
     stats_interval = config.get("stats_interval_s", 60)
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
@@ -191,6 +192,9 @@ def serve(config: dict):
     )
     server.add_insecure_port(f"[::]:{port}")
     server.start()
+
+    from .health import start_health_server
+    start_health_server(health_port)
 
     logger.info("ExHook gRPC server listening on port %d", port)
     logger.info("Waiting for EMQX to connect and register ExHook...")
