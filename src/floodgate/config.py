@@ -23,6 +23,7 @@ DEFAULT_CONFIG = {
         "ShortTurbo",
     ],
     "grpc_port": 9000,
+    "health_port": 8080,
     # MQTT topic filter passed to EMQX ExHook — controls which topics EMQX
     # sends to this service. Use '#' suffix for wildcard subtopics.
     # Default covers all Meshtastic traffic regardless of region depth.

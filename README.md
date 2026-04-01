@@ -130,6 +130,7 @@ floodgate --config config.yaml -v  # DEBUG per-message logging
 | `channel_blacklist` | standard presets | Channels to zero-hop (blacklist mode). |
 | `topic_filter` | `msh/#` | MQTT topic pattern to apply. |
 | `grpc_port` | `9000` | gRPC listen port. |
+| `health_port` | `8080` | HTTP health check port. `GET /health` returns `{"status":"ok","stats":{...}}`. |
 | `stats_interval_s` | `60` | Stats log interval in seconds. `0` disables. |
 | `log_level` | `INFO` | `DEBUG` enables per-message outcome logs. |
 

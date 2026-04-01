@@ -34,7 +34,10 @@ ENV FLOODGATE_CONFIG=/app/config.yaml
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-EXPOSE 9000
+EXPOSE 9000 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"
 
 USER nobody
 

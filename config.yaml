@@ -21,6 +21,9 @@ channel_blacklist:
 # ExHook gRPC port — must match the URL registered in EMQX.
 grpc_port: 9000
 
+# HTTP health check port — GET /health returns {"status":"ok","stats":{...}}
+health_port: 8080
+
 # MQTT topic filter forwarded to this service by EMQX ExHook.
 topic_filter: "msh/#"
 

@@ -20,6 +20,8 @@ spec:
           ports:
             - containerPort: 9000
               protocol: TCP
+            - containerPort: 8080
+              name: health
           env:
             - name: FLOODGATE_CONFIG
               value: /etc/floodgate/config.yaml
@@ -27,6 +29,18 @@ spec:
             - name: config
               mountPath: /etc/floodgate
               readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             requests:
               cpu: 50m

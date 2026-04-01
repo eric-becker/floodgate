@@ -25,6 +25,12 @@ services:
       - ./config.yaml:/app/config.yaml:ro
     depends_on:
       - emqx
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   emqx-data:
