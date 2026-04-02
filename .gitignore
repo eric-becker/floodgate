@@ -1,13 +1,32 @@
+# Python bytecode
 __pycache__/
 *.pyc
 *.pyo
+
+# Build / packaging
 *.egg-info/
 dist/
 build/
+
+# Virtual environments
 .venv/
 venv/
+
+# Environment files
 .env
+
+# Test caches and coverage artefacts
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+coverage/
+
+# Protobuf generated stubs and source protobufs (fetched by scripts/)
 generated/
 protobufs/*
 !protobufs/.gitkeep
 !protobufs/README.md
+
+# Ansible collections / roles (may be installed locally when running playbooks from this dir)
+.ansible/
