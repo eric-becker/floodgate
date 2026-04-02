@@ -31,7 +31,6 @@ jobs:
   # Runs across the full supported Python version matrix.
   # ---------------------------------------------------------------------------
   test:
-    name: Unit tests (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     needs: lint
     strategy:
