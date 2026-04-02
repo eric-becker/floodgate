@@ -2,15 +2,12 @@
 
 import json
 import threading
-import urllib.request
 import urllib.error
+import urllib.request
 from http.server import HTTPServer
 
-import pytest
-
-from floodgate.antiflood import stats as antiflood_stats
 from floodgate.health import _HealthHandler, start_health_server
-
+from floodgate.zerohop import stats as packet_stats
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -42,12 +39,12 @@ class TestHealthEndpoint:
 
     def setup_method(self):
         # Reset stats counters before each test so they don't bleed across tests
-        with antiflood_stats._lock:
-            antiflood_stats.zerohopped = 0
-            antiflood_stats.passthru = 0
-            antiflood_stats.noop = 0
-            antiflood_stats.skipped = 0
-            antiflood_stats.errors = 0
+        with packet_stats._lock:
+            packet_stats.zerohopped = 0
+            packet_stats.passthru = 0
+            packet_stats.noop = 0
+            packet_stats.skipped = 0
+            packet_stats.errors = 0
 
     def test_health_returns_200(self):
         server, base = _start_test_server()
@@ -86,9 +83,9 @@ class TestHealthEndpoint:
             server.shutdown()
 
     def test_health_stats_reflect_counters(self):
-        antiflood_stats.zerohopped = 5
-        antiflood_stats.passthru = 2
-        antiflood_stats.noop = 1
+        packet_stats.zerohopped = 5
+        packet_stats.passthru = 2
+        packet_stats.noop = 1
 
         server, base = _start_test_server()
         try:

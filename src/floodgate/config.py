@@ -10,7 +10,7 @@ import yaml
 logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
-    "channel_policy": "whitelist",
+    "channel_policy": "blacklist",
     "channel_whitelist": [],
     "channel_blacklist": [
         "LongTurbo",
@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
     # How often (seconds) to emit a rolling stats summary at INFO level
     "stats_interval_s": 60,
     "log_level": "INFO",
+    "log_format": "text",   # "text" | "json"
 }
 
 
@@ -50,6 +51,11 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
             _deep_merge(config, user_config)
         else:
             logger.warning("Config file %s not found, using defaults", path)
+
+    # ENV var override for log_format — convenient for Docker/k8s without touching config files
+    env_fmt = os.environ.get("FLOODGATE_LOG_FORMAT")
+    if env_fmt is not None:
+        config["log_format"] = env_fmt.lower()
 
     # Pre-compute sets for fast lookup
     # Use 'or []' to guard against YAML null (channel_whitelist: with no entries)

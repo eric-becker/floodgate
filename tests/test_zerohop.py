@@ -1,13 +1,10 @@
-"""Tests for core antiflood (zero-hop) logic."""
+"""Tests for core zero-hop packet processing logic."""
 
 import json
+import logging
 from unittest.mock import patch
 
-import pytest
-
-import logging
-
-from floodgate.antiflood import (
+from floodgate.zerohop import (
     _peek_meta,
     parse_meshtastic_topic,
     process_message,
@@ -33,7 +30,8 @@ class TestParseMetastasticTopic:
         assert parse_meshtastic_topic("") is None
 
     def test_private_channel(self):
-        assert parse_meshtastic_topic("msh/US/2/e/MyPrivateChannel/!aabbccdd") == ("MyPrivateChannel", "e")
+        result = parse_meshtastic_topic("msh/US/2/e/MyPrivateChannel/!aabbccdd")
+        assert result == ("MyPrivateChannel", "e")
 
     def test_deep_topic_three_prefix_parts(self):
         # msh/{country}/{region}/2/e/LongFast/!nodeId — 3-part prefix
@@ -150,21 +148,21 @@ class TestProcessMessage:
 
     def test_whitelist_empty_zerohops_proto(self):
         config = self._config(policy="whitelist")
-        with patch("floodgate.antiflood.zerohop_protobuf") as mock_zh:
+        with patch("floodgate.zerohop.zerohop_protobuf") as mock_zh:
             mock_zh.return_value = (b"modified", 3, {})
             result = process_message("msh/US/FL/2/e/LongFast/!1234", b"proto", config)
         assert result == b"modified"
 
     def test_whitelist_empty_zerohops_json(self):
         config = self._config(policy="whitelist")
-        with patch("floodgate.antiflood.zerohop_json") as mock_zh:
+        with patch("floodgate.zerohop.zerohop_json") as mock_zh:
             mock_zh.return_value = (b'{"hop_limit":0}', 3, {})
             result = process_message("msh/US/FL/2/json/LongFast/!1234", b"json", config)
         assert result == b'{"hop_limit":0}'
 
     def test_whitelist_empty_zerohops_deep_topic(self):
         config = self._config(policy="whitelist")
-        with patch("floodgate.antiflood.zerohop_protobuf") as mock_zh:
+        with patch("floodgate.zerohop.zerohop_protobuf") as mock_zh:
             mock_zh.return_value = (b"modified", 3, {})
             result = process_message("msh/US/FL/LWS/2/e/LongFast/!16cec9ac", b"proto", config)
         assert result == b"modified"
@@ -181,7 +179,7 @@ class TestProcessMessage:
 
     def test_blacklist_zerohops_listed(self):
         config = self._config(policy="blacklist", blacklist=["LongFast"])
-        with patch("floodgate.antiflood.zerohop_protobuf") as mock_zh:
+        with patch("floodgate.zerohop.zerohop_protobuf") as mock_zh:
             mock_zh.return_value = (b"modified", 3, {})
             result = process_message("msh/US/2/e/LongFast/!1234", b"proto", config)
         assert result == b"modified"
@@ -193,14 +191,14 @@ class TestProcessMessage:
 
     def test_already_zero_returns_none(self):
         config = self._config(policy="whitelist")
-        with patch("floodgate.antiflood.zerohop_protobuf") as mock_zh:
+        with patch("floodgate.zerohop.zerohop_protobuf") as mock_zh:
             mock_zh.return_value = (None, 0, {})
             result = process_message("msh/US/2/e/LongFast/!1234", b"proto", config)
         assert result is None
 
     def test_parse_error_returns_none(self):
         config = self._config(policy="whitelist")
-        with patch("floodgate.antiflood.zerohop_protobuf") as mock_zh:
+        with patch("floodgate.zerohop.zerohop_protobuf") as mock_zh:
             mock_zh.return_value = (None, None, {})
             result = process_message("msh/US/2/e/LongFast/!1234", b"bad", config)
         assert result is None
@@ -215,7 +213,7 @@ class TestProcessMessage:
             "via_mqtt":    True,
             "relay_node":  0xAB,
         }
-        with patch("floodgate.antiflood.zerohop_protobuf") as mock_zh:
+        with patch("floodgate.zerohop.zerohop_protobuf") as mock_zh:
             mock_zh.return_value = (b"modified", 3, meta)
             result = process_message("msh/US/2/e/LongFast/!1234", b"proto", config)
         assert result == b"modified"
@@ -262,7 +260,7 @@ class TestPeekMeta:
         }
         payload = json.dumps({"id": 99999, "from": 1, "to": 4294967295,
                               "hop_start": 3, "hops_away": 0}).encode()
-        with caplog.at_level(logging.DEBUG, logger="floodgate.antiflood"):
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
             result = process_message("msh/US/2/json/LongFast/!aabbccdd", payload, config)
         assert result is None
         assert "99999" in caplog.text

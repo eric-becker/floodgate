@@ -6,7 +6,8 @@ from concurrent import futures
 
 import grpc
 
-from .antiflood import process_message, stats as antiflood_stats
+from .zerohop import process_message
+from .zerohop import stats as packet_stats
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,10 @@ class HookProviderServicer:
 
     def OnMessagePublish(self, request, context):
         msg = request.message
+        logger.debug("OnMessagePublish: topic=%s bytes=%d", msg.topic, len(msg.payload))
         modified_payload = process_message(msg.topic, msg.payload, self.config)
+        result = "modified" if modified_payload is not None else "pass"
+        logger.debug("OnMessagePublish: result=%s", result)
 
         resp = _exhook_pb2.ValuedResponse()
         if modified_payload is not None:
@@ -131,7 +135,7 @@ class HookProviderServicer:
 def _stats_reporter(interval_s: int, stop_event: threading.Event):
     """Log rolling stats every interval_s seconds (resets counters each cycle)."""
     while not stop_event.wait(timeout=interval_s):
-        snap = antiflood_stats.reset()
+        snap = packet_stats.reset()
         if snap["total"] > 0:
             logger.info(
                 "Stats [last %ds]  zerohopped=%-4d  passthru=%-4d  noop=%-4d"
@@ -139,6 +143,16 @@ def _stats_reporter(interval_s: int, stop_event: threading.Event):
                 interval_s,
                 snap["zerohopped"], snap["passthru"], snap["noop"],
                 snap["skipped"],    snap["errors"],   snap["total"],
+                extra={
+                    "event":       "stats",
+                    "interval_s":  interval_s,
+                    "zerohopped":  snap["zerohopped"],
+                    "passthru":    snap["passthru"],
+                    "noop":        snap["noop"],
+                    "skipped":     snap["skipped"],
+                    "errors":      snap["errors"],
+                    "total":       snap["total"],
+                },
             )
         else:
             logger.debug("Stats [last %ds]  no meshtastic messages received", interval_s)
@@ -174,7 +188,8 @@ def _log_startup_policy(config: dict):
 
     logger.info("Stats will be logged every %d seconds", interval)
     logger.info(
-        "Set log_level: DEBUG (or run with -v) to see per-message outcome logs"
+        "Per-message outcomes ([ZEROHOP]/[PASSTHRU]/[NOOP]) logged at INFO.  "
+        "Run with -v for verbose DEBUG."
     )
 
 
@@ -190,8 +205,13 @@ def serve(config: dict):
     _exhook_pb2_grpc.add_HookProviderServicer_to_server(
         HookProviderServicer(config), server
     )
-    server.add_insecure_port(f"[::]:{port}")
-    server.start()
+    try:
+        server.add_insecure_port(f"[::]:{port}")
+        server.start()
+    except Exception as exc:
+        logger.error("Failed to start gRPC server on port %d: %s(%s)",
+                     port, type(exc).__name__, exc, exc_info=True)
+        raise
 
     from .health import start_health_server
     start_health_server(health_port)
@@ -211,5 +231,9 @@ def serve(config: dict):
 
     try:
         server.wait_for_termination()
+    except Exception as exc:
+        logger.error("gRPC server terminated unexpectedly: %s(%s)",
+                     type(exc).__name__, exc, exc_info=True)
+        raise
     finally:
         stop_event.set()

@@ -118,44 +118,57 @@ See [k8s/](k8s/) — Deployment, Service, and ConfigMap. Register the ExHook at 
 pip install -e ".[dev]"
 
 floodgate --config config.yaml
-floodgate --config config.yaml -v  # DEBUG per-message logging
+floodgate --config config.yaml -v  # very verbose DEBUG logging
 ```
 
 ## Configuration
 
+See [config.yaml](config.yaml) for a fully annotated example.
+
 | Key | Default | Description |
 |-----|---------|-------------|
-| `channel_policy` | `whitelist` | `whitelist`: zero-hop all except listed. `blacklist`: zero-hop only listed. |
-| `channel_whitelist` | `[]` | Channels exempt from zero-hop (whitelist mode). Empty = zero-hop all. |
-| `channel_blacklist` | standard presets | Channels to zero-hop (blacklist mode). |
+| `channel_policy` | `blacklist` | See policy docs below. |
+| `channel_blacklist` | 8 standard presets | Channels to zero-hop (blacklist mode). |
+| `channel_whitelist` | `[]` | Channels exempt from zero-hop (whitelist mode). |
 | `topic_filter` | `msh/#` | MQTT topic pattern to apply. |
 | `grpc_port` | `9000` | gRPC listen port. |
 | `health_port` | `8080` | HTTP health check port. `GET /health` returns `{"status":"ok","stats":{...}}`. |
-| `stats_interval_s` | `60` | Stats log interval in seconds. `0` disables. |
-| `log_level` | `INFO` | `DEBUG` enables per-message outcome logs. |
+| `stats_interval_s` | `60` | Stats log interval in seconds. |
+| `log_level` | `INFO` | `INFO` shows per-message outcomes. `DEBUG` adds verbose internals. |
+| `log_format` | `text` | `text` for human-readable output, `json` for Loki/Grafana structured logging. Can also be set via `FLOODGATE_LOG_FORMAT` env var. |
 
-See [config.yaml](config.yaml) for a fully annotated example.
+### Channel policy
 
-**Whitelist mode** — zero-hop everything except named channels:
+**`blacklist` (default)** — zero-hop only the channels named in `channel_blacklist`. All other channels are forwarded unchanged. This is the right choice for most deployments: it targets the standard Meshtastic public presets that flood radio networks, while leaving private or custom channels untouched.
+
+The default `channel_blacklist` contains the eight standard Meshtastic public channel presets:
 ```yaml
-channel_policy: whitelist
-channel_whitelist:
-  - MyPrivateChannel
-```
-
-**Blacklist mode** — zero-hop only named channels:
-```yaml
-channel_policy: blacklist
+channel_policy: "blacklist"
 channel_blacklist:
-  - LongFast
-  - LongModerate
+  - "LongTurbo"
+  - "LongFast"
+  - "LongModerate"
+  - "MediumFast"
+  - "MediumSlow"
+  - "ShortFast"
+  - "ShortSlow"
+  - "ShortTurbo"
 ```
 
-## Deployment
+**`whitelist`** — zero-hop ALL channels *except* those named in `channel_whitelist`. Use this for blanket enforcement when you want every channel zeroed with only specific exemptions.
 
-**Docker Compose** — see [docker-compose.yaml](docker-compose.yaml). Runs floodgate alongside EMQX OSS.
+To zero-hop every packet with no exceptions — maximum enforcement — use an empty whitelist:
+```yaml
+channel_policy: "whitelist"
+channel_whitelist: []
+```
 
-**Kubernetes** — see [k8s/](k8s/). Apply manifests and register the ExHook at `http://floodgate:9000`.
+To exempt specific channels (e.g. a private channel your gateways should rebroadcast normally):
+```yaml
+channel_policy: "whitelist"
+channel_whitelist:
+  - "MyPrivateChannel"
+```
 
 ## Development
 
@@ -164,11 +177,11 @@ pip install -e ".[dev]"
 pytest tests/ -q   # no protobufs required — protobuf imports are mocked
 ```
 
-**Log format (DEBUG):**
+**Log output (INFO, text mode):**
 ```
-[ZEROHOP]  topic=msh/2/e/LongFast/!a2e1a8c4  channel=LongFast  id=3827461829  hop_start=3
-[PASSTHRU] topic=msh/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  id=1234567890
-[STATS]    zerohop=142  noop=3  passthru=0  warn=0  (last 60s)
+2024-03-30 14:23:47 INFO     [floodgate.zerohop] [ZEROHOP]  topic=msh/US/2/e/LongFast/!a2e1a8c4  channel=LongFast  encoding=e  hop 3→0  id=3827461829  from=!a2e1a8c4  to=^all
+2024-03-30 14:23:48 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  id=1234567890
+2024-03-30 14:24:47 INFO     [floodgate.exhook_server] Stats [last 60s]  zerohopped=142   passthru=3    noop=0    skipped=1050  errors=0    total=1195
 ```
 
 ## Legal

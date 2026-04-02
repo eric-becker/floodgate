@@ -2,7 +2,6 @@
 
 import argparse
 import logging
-import sys
 
 from . import __version__
 from .config import load_config
@@ -28,15 +27,17 @@ def main():
         "-v", "--verbose",
         action="store_true",
         help=(
-            "Enable DEBUG logging — emits [ZEROHOP]/[PASSTHRU]/[NOOP]/[SKIP] "
-            "for every message processed. Equivalent to log_level: DEBUG in config.yaml."
+            "Enable DEBUG logging — very verbose (decode steps, byte counts, gRPC calls). "
+            "INFO already shows per-message outcomes ([ZEROHOP]/[PASSTHRU]/[NOOP]). "
+            "Equivalent to log_level: DEBUG in config.yaml."
         ),
     )
 
     args = parser.parse_args()
 
+    # Bootstrap with plain text so load_config() INFO/WARN messages are visible
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level=logging.INFO,
         format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
@@ -47,6 +48,11 @@ def main():
         config["log_level"] = "DEBUG"
 
     log_level = getattr(logging, config.get("log_level", "INFO").upper(), logging.INFO)
+    log_format = config.get("log_format", "text")
+
+    # Install real handler (potentially JSON), replacing the bootstrap handler
+    from .log_setup import configure_logging
+    configure_logging(log_level, log_format)
     logging.getLogger("floodgate").setLevel(log_level)
 
     logger = logging.getLogger("floodgate")

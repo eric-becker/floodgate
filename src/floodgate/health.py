@@ -5,7 +5,7 @@ import logging
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from .antiflood import stats as antiflood_stats
+from .zerohop import stats as packet_stats
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
         if self.path == "/health":
             body = json.dumps({
                 "status": "ok",
-                "stats": antiflood_stats.snapshot(),
+                "stats": packet_stats.snapshot(),
             }).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
