@@ -4,7 +4,7 @@ metadata:
   name: floodgate-config
 data:
   config.yaml: |
-    channel_policy: "whitelist"
+    channel_policy: "blacklist"
     channel_whitelist: []
     channel_blacklist:
       - "LongTurbo"
@@ -16,6 +16,8 @@ data:
       - "ShortSlow"
       - "ShortTurbo"
     grpc_port: 9000
+    health_port: 8080
     topic_filter: "msh/#"
     stats_interval_s: 60
     log_level: "INFO"
+    log_format: "text"

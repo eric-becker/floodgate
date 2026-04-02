@@ -12,7 +12,7 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → modified payload → EMQX �
 | File | Role |
 |------|------|
 | `src/floodgate/exhook_server.py` | gRPC server; EMQX connects here |
-| `src/floodgate/antiflood.py` | Core logic: packet decode, zerohop, logging |
+| `src/floodgate/zerohop.py` | Core logic: packet decode, zerohop, logging |
 | `src/floodgate/config.py` | Config loader; channel policy evaluation |
 | `src/floodgate/__main__.py` | CLI entry point |
 | `proto/emqx/exhook.proto` | EMQX ExHook interface definition |
@@ -56,7 +56,8 @@ After startup, register the ExHook in EMQX (see docker-compose.yaml header for t
 
 | Key | Default | Effect |
 |-----|---------|--------|
-| `channel_policy` | `whitelist` | `whitelist`: zerohop all except listed. `blacklist`: zerohop only listed. |
+| `channel_policy` | `blacklist` | `blacklist` (default): zerohop only listed channels. `whitelist`: zerohop all except listed. |
+| `channel_blacklist` | 8 standard presets | Channels to zerohop (blacklist mode). Default = all standard Meshtastic public presets. |
 | `channel_whitelist` | `[]` | Channels exempt from zerohop (whitelist mode). Empty = zerohop everything. |
-| `channel_blacklist` | standard presets | Channels to zerohop (blacklist mode). |
-| `log_level` | `INFO` | Set to `DEBUG` for per-message outcome logs. |
+| `log_level` | `INFO` | `INFO` logs per-message outcomes. `DEBUG` adds decode/gRPC internals. |
+| `log_format` | `text` | `text` (default) or `json` for Loki/Grafana. Override with `FLOODGATE_LOG_FORMAT` env var. |

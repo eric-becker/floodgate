@@ -3,3 +3,4 @@ grpcio-tools>=1.80.0
 protobuf>=4.25.0
 paho-mqtt>=2.0.0
 pyyaml>=6.0
+python-json-logger>=2.0

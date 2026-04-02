@@ -1,13 +1,35 @@
 # floodgate configuration
 
-# Channel policy: "whitelist" zero-hops ALL channels EXCEPT those listed below.
-#                 "blacklist" zero-hops ONLY channels listed below.
-channel_policy: "whitelist"
+# ---------------------------------------------------------------------------
+# Channel policy
+# ---------------------------------------------------------------------------
+#
+# Controls which channels get zero-hopped (hop_limit set to 0 in-flight).
+#
+# Two modes:
+#
+#   blacklist  (default)
+#     Zero-hop only the channels listed in channel_blacklist.
+#     All other channels are forwarded unchanged.
+#     Use this to target specific well-known public channels while leaving
+#     private or custom channels alone.
+#
+#   whitelist
+#     Zero-hop ALL channels EXCEPT those listed in channel_whitelist.
+#     Use this when you want blanket zero-hop enforcement with only a few
+#     named exemptions.
+#     To zero-hop every packet with no exceptions, set channel_whitelist: []
+#
+# Default: blacklist targeting the eight standard Meshtastic public presets.
+# This is the recommended starting point for most deployments — it enforces
+# the zero-hop policy on public channels that flood radio networks while
+# leaving your private/custom channels untouched.
+#
+channel_policy: "blacklist"
 
-# Channels exempt from zero-hopping (whitelist policy). Empty = zero-hop everything.
-channel_whitelist: []
-
-# Channels to zero-hop (blacklist policy). Standard Meshtastic public channel presets.
+# Channels to zero-hop (blacklist policy).
+# These are the eight standard Meshtastic public channel presets.
+# Remove any channel your deployment does not use, or add custom names.
 channel_blacklist:
   - "LongTurbo"
   - "LongFast"
@@ -17,6 +39,14 @@ channel_blacklist:
   - "ShortFast"
   - "ShortSlow"
   - "ShortTurbo"
+
+# Channels exempt from zero-hopping (whitelist policy only).
+# Has no effect when channel_policy is "blacklist".
+# Empty list means zero-hop ALL channels — use this for maximum enforcement.
+# Example: to exempt a private channel, add it here:
+#   channel_whitelist:
+#     - "MyPrivateChannel"
+channel_whitelist: []
 
 # ExHook gRPC port — must match the URL registered in EMQX.
 grpc_port: 9000
@@ -31,5 +61,12 @@ topic_filter: "msh/#"
 stats_interval_s: 60
 
 # Log level: DEBUG, INFO, WARNING, ERROR
-# DEBUG emits per-message outcome lines — useful for verifying behavior.
+# INFO emits per-message outcome lines ([ZEROHOP]/[PASSTHRU]/[NOOP]) — recommended for normal operation.
+# DEBUG adds very verbose internals (decode steps, byte counts, gRPC calls).
 log_level: "INFO"
+
+# Log output format: "text" (default, human-readable) or "json" (structured, for Loki/Grafana).
+# Can also be set via the FLOODGATE_LOG_FORMAT environment variable (overrides this file).
+# JSON mode emits one JSON object per line with fields: level, timestamp, message,
+# outcome, topic, channel, encoding, packet_id, from_node, to_node, hop_from, hop_to.
+log_format: "text"

@@ -4,7 +4,6 @@ import json as _json
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +15,7 @@ def _load_protos():
     global _mqtt_pb2, _mesh_pb2
     if _mqtt_pb2 is None:
         try:
-            from meshtastic import mqtt_pb2, mesh_pb2
+            from meshtastic import mesh_pb2, mqtt_pb2
             _mqtt_pb2 = mqtt_pb2
             _mesh_pb2 = mesh_pb2
         except ImportError:
@@ -83,7 +82,7 @@ stats = AntifloodStats()
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fmt_node(node_id: Optional[int]) -> str:
+def _fmt_node(node_id: int | None) -> str:
     """Format a full Meshtastic node ID for display."""
     if node_id is None:
         return "?"
@@ -118,7 +117,7 @@ def _fmt_meta(meta: dict) -> str:
 # Topic parsing
 # ---------------------------------------------------------------------------
 
-def parse_meshtastic_topic(topic: str) -> Optional[Tuple[str, str]]:
+def parse_meshtastic_topic(topic: str) -> tuple[str, str] | None:
     """Parse a Meshtastic MQTT topic and return (channel, encoding) if it is a
     processable packet topic, otherwise None.
 
@@ -219,7 +218,7 @@ def _extract_proto_meta(pkt) -> dict:
     return meta
 
 
-def zerohop_protobuf(payload: bytes) -> Tuple[Optional[bytes], Optional[int], dict]:
+def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
     """Zero-hop a protobuf ServiceEnvelope.
 
     Returns (modified_bytes, original_hop_limit, packet_meta):
@@ -231,6 +230,8 @@ def zerohop_protobuf(payload: bytes) -> Tuple[Optional[bytes], Optional[int], di
     try:
         envelope = _mqtt_pb2.ServiceEnvelope()
         envelope.ParseFromString(payload)
+        logger.debug("zerohop_protobuf: parsed %d bytes, has_packet=%s",
+                     len(payload), envelope.HasField("packet"))
 
         if not envelope.HasField("packet"):
             logger.debug("ServiceEnvelope has no packet field")
@@ -238,12 +239,14 @@ def zerohop_protobuf(payload: bytes) -> Tuple[Optional[bytes], Optional[int], di
 
         pkt = envelope.packet
         old_hop = pkt.hop_limit
+        logger.debug("zerohop_protobuf: old_hop=%d", old_hop)
         if old_hop == 0:
             meta = _extract_proto_meta(pkt)
             return None, 0, meta
 
         envelope.packet.hop_limit = 0
         modified = envelope.SerializeToString()
+        logger.debug("zerohop_protobuf: serialized %d bytes", len(modified))
 
     except Exception as exc:
         logger.warning("Failed to parse protobuf payload (%d bytes): %s(%s)",
@@ -254,7 +257,7 @@ def zerohop_protobuf(payload: bytes) -> Tuple[Optional[bytes], Optional[int], di
     return modified, old_hop, meta
 
 
-def zerohop_json(payload: bytes) -> Tuple[Optional[bytes], Optional[int], dict]:
+def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
     """Zero-hop a JSON-encoded Meshtastic packet.
 
     Meshtastic JSON format omits 'hop_limit' and uses 'hops_away' instead:
@@ -267,6 +270,7 @@ def zerohop_json(payload: bytes) -> Tuple[Optional[bytes], Optional[int], dict]:
     """
     try:
         data = _json.loads(payload)
+        logger.debug("zerohop_json: parsed %d bytes, keys=%s", len(payload), list(data.keys()))
     except Exception as exc:
         logger.warning("Failed to parse JSON payload (%d bytes): %s(%s)",
                        len(payload), type(exc).__name__, exc)
@@ -299,18 +303,31 @@ def zerohop_json(payload: bytes) -> Tuple[Optional[bytes], Optional[int], dict]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def process_message(topic: str, payload: bytes, config: dict) -> Optional[bytes]:
+def process_message(topic: str, payload: bytes, config: dict) -> bytes | None:
     """Process one MQTT message; return modified payload or None (pass-through).
 
     Non-packet msh/ topics (map reports, stat topics, etc.) are silently
     ignored and counted under 'skipped' in stats.
 
-    Processed packet outcomes are logged at DEBUG level:
+    Processed packet outcomes are logged at INFO level:
       [ZEROHOP]   modified, subscribers receive hop_limit=0
       [PASSTHRU]  channel exempted by policy, subscribers receive original
       [NOOP]      hop_limit was already 0, no change
       [WARN]      payload could not be parsed — original forwarded unchanged
     """
+    try:
+        return _process_message_inner(topic, payload, config)
+    except Exception as exc:
+        stats.inc("errors")
+        logger.error(
+            "Unhandled exception processing topic=%s: %s(%s)",
+            topic, type(exc).__name__, exc,
+            exc_info=True,
+        )
+        return None
+
+
+def _process_message_inner(topic: str, payload: bytes, config: dict) -> bytes | None:
     from .config import should_zerohop
 
     parsed = parse_meshtastic_topic(topic)
@@ -324,11 +341,21 @@ def process_message(topic: str, payload: bytes, config: dict) -> Optional[bytes]
 
     if not should_zerohop(config, channel):
         stats.inc("passthru")
-        if logger.isEnabledFor(logging.DEBUG):
-            meta = _peek_meta(encoding, payload)
-            pkt_fields = _fmt_meta(meta)
-            logger.debug("[PASSTHRU] topic=%s  channel=%s%s",
-                         topic, channel, f"  {pkt_fields}" if pkt_fields else "")
+        meta = _peek_meta(encoding, payload)
+        pkt_fields = _fmt_meta(meta)
+        logger.info(
+            "[PASSTHRU] topic=%s  channel=%s%s",
+            topic, channel, f"  {pkt_fields}" if pkt_fields else "",
+            extra={
+                "outcome":    "passthru",
+                "topic":      topic,
+                "channel":    channel,
+                "encoding":   encoding,
+                "packet_id":  meta.get("packet_id"),
+                "from_node":  _fmt_node(meta.get("sender")),
+                "to_node":    _fmt_node(meta.get("destination")),
+            },
+        )
         return None
 
     if encoding == "json":
@@ -343,22 +370,51 @@ def process_message(topic: str, payload: bytes, config: dict) -> Optional[bytes]
         logger.warning(
             "[WARN]     topic=%s  channel=%s  could not parse %d-byte payload",
             topic, channel, len(payload),
+            extra={
+                "outcome":   "warn",
+                "topic":     topic,
+                "channel":   channel,
+                "encoding":  encoding,
+                "bytes":     len(payload),
+            },
         )
         return None
 
     if old_hop == 0:
         stats.inc("noop")
-        logger.debug(
+        logger.info(
             "[NOOP]     topic=%s  channel=%s  hop_limit already 0%s",
             topic, channel,
             ("  " + pkt_fields) if pkt_fields else "",
+            extra={
+                "outcome":    "noop",
+                "topic":      topic,
+                "channel":    channel,
+                "encoding":   encoding,
+                "packet_id":  meta.get("packet_id"),
+                "from_node":  _fmt_node(meta.get("sender")),
+                "to_node":    _fmt_node(meta.get("destination")),
+                "hop_from":   0,
+                "hop_to":     0,
+            },
         )
         return None
 
     stats.inc("zerohopped")
-    logger.debug(
-        "[ZEROHOP]  topic=%s  channel=%s  encoding=%s  hop %d→0%s",
+    logger.info(
+        "[ZEROHOP]  topic=%s  channel=%s  encoding=%s  hop %d\u21920%s",
         topic, channel, encoding, old_hop,
         ("  " + pkt_fields) if pkt_fields else "",
+        extra={
+            "outcome":    "zerohop",
+            "topic":      topic,
+            "channel":    channel,
+            "encoding":   encoding,
+            "packet_id":  meta.get("packet_id"),
+            "from_node":  _fmt_node(meta.get("sender")),
+            "to_node":    _fmt_node(meta.get("destination")),
+            "hop_from":   old_hop,
+            "hop_to":     0,
+        },
     )
     return modified
