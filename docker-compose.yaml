@@ -23,6 +23,8 @@ services:
 
   floodgate:
     build: .
+    ports:
+      - "8080:8080"     # Health check / stats
     environment:
       FLOODGATE_CONFIG: /app/config.yaml
     volumes:
