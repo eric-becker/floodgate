@@ -12,22 +12,31 @@ floodgate fills this gap. It runs alongside your self-hosted EMQX and enforces z
 
 ## How It Works
 
-```
-Gateway (LoRa uplink)
-       │  PUBLISH msh/…/e/…
-       ▼
-     EMQX
-       │  ExHook: OnMessagePublish
-       ▼
-  floodgate (gRPC)
-       │  Decodes ServiceEnvelope
-       │  Sets MeshPacket.hop_limit = 0
-       │  Re-encodes → returns modified payload
-       ▼
-     EMQX  →  Subscribers
+```mermaid
+flowchart LR
+    GW["🔭 LoRa Gateway\nMQTT PUBLISH\nmsh/.../e/LongFast/!node"]
+    EMQX1["⚡ EMQX Broker\nreceives publish"]
+    FG["🔒 floodgate\nDecode ServiceEnvelope\nhop_limit 3 → 0\nRe-encode payload"]
+    EMQX2["⚡ EMQX Broker\ndelivers packet"]
+    SUB["📡 Subscribers\nMQTT clients &\nother gateways"]
+
+    GW -->|"PUBLISH  hop_limit=3"| EMQX1
+    EMQX1 -->|"gRPC OnMessagePublish"| FG
+    FG -->|"modified  hop_limit=0"| EMQX2
+    EMQX2 -->|"no rebroadcast"| SUB
+
+    classDef gateway fill:#0d9488,stroke:#0f766e,color:#fff
+    classDef broker  fill:#7c3aed,stroke:#6d28d9,color:#fff
+    classDef core    fill:#059669,stroke:#047857,color:#fff
+    classDef sub     fill:#d97706,stroke:#b45309,color:#fff
+
+    class GW gateway
+    class EMQX1,EMQX2 broker
+    class FG core
+    class SUB sub
 ```
 
-Unlike a standard MQTT subscriber, floodgate modifies payloads in-flight — all subscribers receive the zeroed packet transparently. Meshtastic gateways use the protobuf (`/e/`) topic for LoRa downlink. The JSON (`/json/`) topic is a human-readable mirror that some clients publish alongside for monitoring tools like MQTT Explorer — floodgate zero-hops both for consistency.
+Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the zeroed packet transparently. Meshtastic gateways use the protobuf (`/e/`) topic for LoRa downlink. The JSON (`/json/`) topic is a human-readable mirror that some clients publish alongside for monitoring tools like MQTT Explorer — floodgate zero-hops both for consistency.
 
 ```
 Before:  hop_limit: 3  hop_start: 3
@@ -170,18 +179,106 @@ channel_whitelist:
   - "MyPrivateChannel"
 ```
 
+## Verifying operation
+
+### Health endpoint
+
+floodgate exposes a health check at `GET /health` on port 8080 (configurable via `health_port`):
+
+```bash
+curl -s http://localhost:8080/health | jq .
+```
+
+```json
+{
+  "status": "ok",
+  "stats": {
+    "zerohopped": 142,
+    "passthru": 3,
+    "noop": 0,
+    "skipped": 1050,
+    "errors": 0,
+    "total": 1195
+  }
+}
+```
+
+### Log output
+
+Per-message outcomes are logged at **INFO** — no special flags required:
+
+```
+2026-04-01 12:00:01 INFO     [floodgate.zerohop] [ZEROHOP]  topic=msh/US/2/e/LongFast/!a2e1a8c4  channel=LongFast  encoding=e  hop 3→0  id=3827461829  from=!a2e1a8c4  to=^all
+2026-04-01 12:00:02 INFO     [floodgate.zerohop] [NOOP]     topic=msh/US/2/e/LongFast/!b3c4d5e6  channel=LongFast  encoding=e  hop 0→0  id=2019283746  from=!b3c4d5e6  to=^all
+2026-04-01 12:00:15 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  encoding=e  id=1234567890  from=!a2e1a8c4  to=^all
+2026-04-01 12:01:01 INFO     [floodgate.exhook_server] Stats [last 60s]  zerohopped=142   passthru=1    noop=0    skipped=1050  errors=0    total=1193
+```
+
+For **structured JSON output** (Loki/Grafana ingestion), set `log_format: json` in config or:
+
+```bash
+FLOODGATE_LOG_FORMAT=json floodgate --config config.yaml
+```
+
+Each log line is a JSON object with structured fields (`outcome`, `channel`, `packet_id`, `from_node`, `hop_from`, etc.) usable in LogQL:
+
+```
+{job="floodgate"} | json | outcome="zerohop"
+{job="floodgate"} | json | channel="LongFast"
+```
+
+### Kubernetes
+
+```bash
+kubectl logs -n floodgate deploy/floodgate -f
+kubectl logs -n floodgate deploy/floodgate --since=5m | grep ZEROHOP | wc -l
+```
+
+### Sample packet (before / after)
+
+A `ServiceEnvelope` arriving on topic `msh/US/2/e/LongFast/!a2e1a8c4` — protobuf fields shown for clarity:
+
+**Before** (as published by the uploading gateway):
+```
+MeshPacket {
+  from:       0xa2e1a8c4   (!a2e1a8c4)
+  to:         0xffffffff   (broadcast)
+  id:         3827461829
+  hop_limit:  3            ← will flood the mesh on downlink
+  hop_start:  3
+  channel:    0
+  payload:    <encrypted Data protobuf>
+}
+```
+
+**After** (returned to EMQX, delivered to all subscribers):
+```
+MeshPacket {
+  from:       0xa2e1a8c4
+  to:         0xffffffff
+  id:         3827461829
+  hop_limit:  0            ← zeroed — gateway will not rebroadcast
+  hop_start:  3            ← preserved for mesh-distance observability
+  channel:    0
+  payload:    <encrypted Data protobuf>   (unchanged)
+}
+```
+
+The JSON topic mirror (`/json/LongFast/!a2e1a8c4`) is zeroed the same way — `hop_limit` is set to `0` in the JSON object.
+
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -q   # no protobufs required — protobuf imports are mocked
+pytest tests/ --ignore=tests/test_container_smoke.py -q   # no Docker required
+pytest tests/ -q   # full suite including container smoke test (requires Docker)
 ```
 
 **Log output (INFO, text mode):**
 ```
-2024-03-30 14:23:47 INFO     [floodgate.zerohop] [ZEROHOP]  topic=msh/US/2/e/LongFast/!a2e1a8c4  channel=LongFast  encoding=e  hop 3→0  id=3827461829  from=!a2e1a8c4  to=^all
-2024-03-30 14:23:48 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  id=1234567890
-2024-03-30 14:24:47 INFO     [floodgate.exhook_server] Stats [last 60s]  zerohopped=142   passthru=3    noop=0    skipped=1050  errors=0    total=1195
+2026-04-01 14:23:47 INFO     [floodgate.zerohop] [ZEROHOP]  topic=msh/US/2/e/LongFast/!a2e1a8c4  channel=LongFast  encoding=e  hop 3→0  id=3827461829  from=!a2e1a8c4  to=^all
+2026-04-01 14:23:48 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  encoding=e  id=1234567890  from=!a2e1a8c4  to=^all
+2026-04-01 14:24:47 INFO     [floodgate.exhook_server] Stats [last 60s]  zerohopped=142   passthru=3    noop=0    skipped=1050  errors=0    total=1195
 ```
 
 ## Legal
