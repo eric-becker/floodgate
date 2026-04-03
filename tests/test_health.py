@@ -38,13 +38,15 @@ def _get(url):
 class TestHealthEndpoint:
 
     def setup_method(self):
-        # Reset stats counters before each test so they don't bleed across tests
+        # Reset both rolling and lifetime counters before each test
         with packet_stats._lock:
-            packet_stats.zerohopped = 0
+            packet_stats.zerohop = 0
             packet_stats.passthru = 0
             packet_stats.noop = 0
             packet_stats.skipped = 0
             packet_stats.errors = 0
+            for k in packet_stats._lifetime:
+                packet_stats._lifetime[k] = 0
 
     def test_health_returns_200(self):
         server, base = _start_test_server()
@@ -82,10 +84,12 @@ class TestHealthEndpoint:
         finally:
             server.shutdown()
 
-    def test_health_stats_reflect_counters(self):
-        packet_stats.zerohop = 5
-        packet_stats.passthru = 2
-        packet_stats.noop = 1
+    def test_health_stats_reflect_lifetime_counters(self):
+        for _ in range(5):
+            packet_stats.inc("zerohop")
+        for _ in range(2):
+            packet_stats.inc("passthru")
+        packet_stats.inc("noop")
 
         server, base = _start_test_server()
         try:
@@ -95,6 +99,25 @@ class TestHealthEndpoint:
             assert stats["passthru"] == 2
             assert stats["noop"] == 1
             assert stats["total"] == 8
+        finally:
+            server.shutdown()
+
+    def test_health_stats_survive_reset(self):
+        """Lifetime counters persist after stats reporter reset()."""
+        for _ in range(3):
+            packet_stats.inc("zerohop")
+        packet_stats.inc("passthru")
+
+        # Simulate stats reporter draining the rolling window
+        packet_stats.reset()
+
+        server, base = _start_test_server()
+        try:
+            _, body = _get(f"{base}/health")
+            stats = json.loads(body)["stats"]
+            assert stats["zerohop"] == 3
+            assert stats["passthru"] == 1
+            assert stats["total"] == 4
         finally:
             server.shutdown()
 

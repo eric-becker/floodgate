@@ -48,7 +48,7 @@ Or with Docker Compose (includes EMQX):
 docker compose up --build
 ```
 
-After startup, register the ExHook in EMQX (see docker-compose.yaml header for the curl command).
+After startup, register the ExHook in EMQX (see README Deployment section for the curl commands).
 
 ## Branching & Commit Strategy
 

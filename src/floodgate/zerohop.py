@@ -30,46 +30,48 @@ def _load_protos():
 # Statistics
 # ---------------------------------------------------------------------------
 
+_COUNTER_NAMES = ("zerohop", "passthru", "noop", "skipped", "errors")
+
+
 @dataclass
 class AntifloodStats:
-    """Thread-safe counters for observability."""
+    """Thread-safe packet counters.
+
+    Two sets: rolling window (reset each stats interval) and lifetime
+    (cumulative, never reset). The stats reporter reads rolling via reset();
+    the health endpoint reads lifetime via snapshot().
+    """
+    # Rolling window — reset by stats reporter each interval
     zerohop:  int = 0
     passthru: int = 0
     noop:     int = 0
     skipped:  int = 0
     errors:   int = 0
+    # Lifetime — never reset
+    _lifetime: dict = field(default_factory=lambda: {k: 0 for k in _COUNTER_NAMES})
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def inc(self, counter: str):
         with self._lock:
             setattr(self, counter, getattr(self, counter) + 1)
+            self._lifetime[counter] += 1
 
     @property
     def total(self) -> int:
         return self.zerohop + self.passthru + self.noop + self.skipped + self.errors
 
     def snapshot(self) -> dict:
+        """Return lifetime cumulative counters (for health endpoint)."""
         with self._lock:
-            return {
-                "zerohop":  self.zerohop,
-                "passthru": self.passthru,
-                "noop":     self.noop,
-                "skipped":  self.skipped,
-                "errors":   self.errors,
-                "total":    self.total,
-            }
+            snap = dict(self._lifetime)
+            snap["total"] = sum(self._lifetime.values())
+            return snap
 
     def reset(self) -> dict:
-        """Return a snapshot then reset all counters to zero."""
+        """Return rolling window snapshot then reset rolling counters to zero."""
         with self._lock:
-            snap = {
-                "zerohop":  self.zerohop,
-                "passthru": self.passthru,
-                "noop":     self.noop,
-                "skipped":  self.skipped,
-                "errors":   self.errors,
-                "total":    self.total,
-            }
+            snap = {k: getattr(self, k) for k in _COUNTER_NAMES}
+            snap["total"] = self.total
             self.zerohop = self.passthru = self.noop = self.skipped = self.errors = 0
             return snap
 
