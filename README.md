@@ -14,26 +14,22 @@ floodgate fills this gap. It runs alongside your self-hosted EMQX and enforces z
 
 ```mermaid
 flowchart LR
-    GW["🔭 LoRa Gateway\nMQTT PUBLISH\nmsh/.../e/LongFast/!node"]
-    EMQX1["⚡ EMQX Broker\nreceives publish"]
-    FG["🔒 floodgate\nDecode ServiceEnvelope\nhop_limit 3 → 0\nRe-encode payload"]
-    EMQX2["⚡ EMQX Broker\ndelivers packet"]
-    SUB["📡 Subscribers\nMQTT clients &\nother gateways"]
+    GW(["LoRa Gateway"])
+    E1(["EMQX"])
+    FG(["floodgate"])
+    E2(["EMQX"])
+    SB(["Subscribers"])
 
-    GW -->|"PUBLISH  hop_limit=3"| EMQX1
-    EMQX1 -->|"gRPC OnMessagePublish"| FG
-    FG -->|"modified  hop_limit=0"| EMQX2
-    EMQX2 -->|"no rebroadcast"| SUB
+    GW -->|"PUBLISH  hop_limit=3"| E1
+    E1 -->|"ExHook  gRPC"| FG
+    FG -->|"hop_limit  3 → 0"| E2
+    E2 -->|"deliver"| SB
 
-    classDef gateway fill:#0d9488,stroke:#0f766e,color:#fff
-    classDef broker  fill:#7c3aed,stroke:#6d28d9,color:#fff
-    classDef core    fill:#059669,stroke:#047857,color:#fff
-    classDef sub     fill:#d97706,stroke:#b45309,color:#fff
-
-    class GW gateway
-    class EMQX1,EMQX2 broker
-    class FG core
-    class SUB sub
+    style GW fill:#0d9488,stroke:#0f766e,color:#ffffff,font-weight:bold
+    style E1 fill:#7c3aed,stroke:#6d28d9,color:#ffffff,font-weight:bold
+    style FG fill:#059669,stroke:#047857,color:#ffffff,font-weight:bold
+    style E2 fill:#7c3aed,stroke:#6d28d9,color:#ffffff,font-weight:bold
+    style SB fill:#d97706,stroke:#b45309,color:#ffffff,font-weight:bold
 ```
 
 Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the zeroed packet transparently. Meshtastic gateways use the protobuf (`/e/`) topic for LoRa downlink. The JSON (`/json/`) topic is a human-readable mirror that some clients publish alongside for monitoring tools like MQTT Explorer — floodgate zero-hops both for consistency.
