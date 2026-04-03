@@ -132,30 +132,29 @@ class HookProviderServicer:
 # Periodic stats reporter
 # ---------------------------------------------------------------------------
 
-def _stats_reporter(interval_s: int, stop_event: threading.Event):
+def _stats_reporter(interval_s: int, stop_event: threading.Event,
+                    stats_log: bool = True):
     """Log rolling stats every interval_s seconds (resets counters each cycle)."""
     while not stop_event.wait(timeout=interval_s):
         snap = packet_stats.reset()
+        if not stats_log:
+            continue
         if snap["total"] > 0:
             logger.info(
-                "Stats [last %ds]  zerohopped=%-4d  passthru=%-4d  noop=%-4d"
-                "  skipped=%-4d  errors=%-4d  total=%d",
-                interval_s,
-                snap["zerohopped"], snap["passthru"], snap["noop"],
-                snap["skipped"],    snap["errors"],   snap["total"],
+                "stats",
                 extra={
-                    "event":       "stats",
-                    "interval_s":  interval_s,
-                    "zerohopped":  snap["zerohopped"],
-                    "passthru":    snap["passthru"],
-                    "noop":        snap["noop"],
-                    "skipped":     snap["skipped"],
-                    "errors":      snap["errors"],
-                    "total":       snap["total"],
+                    "event":      "stats",
+                    "interval_s": interval_s,
+                    "zerohop":    snap["zerohop"],
+                    "passthru":   snap["passthru"],
+                    "noop":       snap["noop"],
+                    "skipped":    snap["skipped"],
+                    "errors":     snap["errors"],
+                    "total":      snap["total"],
                 },
             )
         else:
-            logger.debug("Stats [last %ds]  no meshtastic messages received", interval_s)
+            logger.debug("No meshtastic messages in last %ds", interval_s)
 
 
 # ---------------------------------------------------------------------------
@@ -220,10 +219,11 @@ def serve(config: dict):
     logger.info("Waiting for EMQX to connect and register ExHook...")
     _log_startup_policy(config)
 
+    stats_log = config.get("stats_log", True)
     stop_event   = threading.Event()
     stats_thread = threading.Thread(
         target=_stats_reporter,
-        args=(stats_interval, stop_event),
+        args=(stats_interval, stop_event, stats_log),
         daemon=True,
         name="stats-reporter",
     )
