@@ -13,21 +13,10 @@ floodgate fills this gap. It runs alongside your self-hosted EMQX and enforces z
 ## How It Works
 
 ```
-Gateway (LoRa uplink)
-       │  PUBLISH msh/…/e/…
-       ▼
-     EMQX
-       │  ExHook: OnMessagePublish
-       ▼
-  floodgate (gRPC)
-       │  Decodes ServiceEnvelope
-       │  Sets MeshPacket.hop_limit = 0
-       │  Re-encodes → returns modified payload
-       ▼
-     EMQX  →  Subscribers
+Gateway → EMQX → [ExHook gRPC] → floodgate → modified payload → EMQX → Subscribers
 ```
 
-Unlike a standard MQTT subscriber, floodgate modifies payloads in-flight — all subscribers receive the zeroed packet transparently. Meshtastic gateways use the protobuf (`/e/`) topic for LoRa downlink. The JSON (`/json/`) topic is a human-readable mirror that some clients publish alongside for monitoring tools like MQTT Explorer — floodgate zero-hops both for consistency.
+Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the zeroed packet transparently. Meshtastic gateways use the protobuf (`/e/`) topic for LoRa downlink. The JSON (`/json/`) topic is a human-readable mirror that some clients publish alongside for monitoring tools like MQTT Explorer — floodgate zero-hops both for consistency.
 
 ```
 Before:  hop_limit: 3  hop_start: 3
@@ -102,7 +91,7 @@ cd floodgate
 docker compose up --build -d
 ```
 
-See [docker-compose.yaml](docker-compose.yaml) for the ExHook registration curl command to run after startup.
+After startup, register the ExHook per the [Deployment](#deployment) instructions above.
 
 ### Kubernetes
 
@@ -170,18 +159,123 @@ channel_whitelist:
   - "MyPrivateChannel"
 ```
 
+## Security
+
+### Network exposure
+
+| Port | Purpose | Exposure |
+|------|---------|----------|
+| `9000` (gRPC) | EMQX ExHook connection | **Internal only.** Bind to your private/cluster network. Never expose publicly. |
+| `8080` (HTTP) | Health check `/health` | **Internal only.** Operational stats — restrict to your monitoring network. |
+
+The gRPC connection between EMQX and floodgate is **unencrypted** (no TLS). This is acceptable when both services run in the same Kubernetes namespace or Docker network on a trusted private network. Do not route this port through a public-facing load balancer or ingress.
+
+The Kubernetes manifests in [k8s/](k8s/) use `type: ClusterIP` so neither port is externally reachable by default.
+
+### Container hardening
+
+The production container image runs as `nobody` (UID 65534) with a read-only filesystem, no Linux capabilities, and no privilege escalation. See [Dockerfile](Dockerfile) and [k8s/deployment.yaml](k8s/deployment.yaml).
+
+## Verifying operation
+
+### Health endpoint
+
+floodgate exposes a health check at `GET /health` on port 8080 (configurable via `health_port`):
+
+```bash
+curl -s http://localhost:8080/health | jq .
+```
+
+```json
+{
+  "status": "ok",
+  "stats": {
+    "zerohopped": 142,
+    "passthru": 3,
+    "noop": 0,
+    "skipped": 1050,
+    "errors": 0,
+    "total": 1195
+  }
+}
+```
+
+### Log output
+
+Per-message outcomes are logged at **INFO** — no special flags required:
+
+```
+2026-04-01 12:00:01 INFO     [floodgate.zerohop] [ZEROHOP]  topic=msh/US/2/e/LongFast/!a2e1a8c4  channel=LongFast  encoding=e  hop 3→0  id=3827461829  from=!a2e1a8c4  to=^all
+2026-04-01 12:00:02 INFO     [floodgate.zerohop] [NOOP]     topic=msh/US/2/e/LongFast/!b3c4d5e6  channel=LongFast  encoding=e  hop 0→0  id=2019283746  from=!b3c4d5e6  to=^all
+2026-04-01 12:00:15 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  encoding=e  id=1234567890  from=!a2e1a8c4  to=^all
+2026-04-01 12:01:01 INFO     [floodgate.exhook_server] Stats [last 60s]  zerohopped=142   passthru=1    noop=0    skipped=1050  errors=0    total=1193
+```
+
+For **structured JSON output** (Loki/Grafana ingestion), set `log_format: json` in config or:
+
+```bash
+FLOODGATE_LOG_FORMAT=json floodgate --config config.yaml
+```
+
+Each log line is a JSON object with structured fields (`outcome`, `channel`, `packet_id`, `from_node`, `hop_from`, etc.) usable in LogQL:
+
+```
+{job="floodgate"} | json | outcome="zerohop"
+{job="floodgate"} | json | channel="LongFast"
+```
+
+### Kubernetes
+
+```bash
+kubectl logs -n floodgate deploy/floodgate -f
+kubectl logs -n floodgate deploy/floodgate --since=5m | grep ZEROHOP | wc -l
+```
+
+### Sample packet (before / after)
+
+A `ServiceEnvelope` arriving on topic `msh/US/2/e/LongFast/!a2e1a8c4` — protobuf fields shown for clarity:
+
+**Before** (as published by the uploading gateway):
+```
+MeshPacket {
+  from:       0xa2e1a8c4   (!a2e1a8c4)
+  to:         0xffffffff   (broadcast)
+  id:         3827461829
+  hop_limit:  3            ← will flood the mesh on downlink
+  hop_start:  3
+  channel:    0
+  payload:    <encrypted Data protobuf>
+}
+```
+
+**After** (returned to EMQX, delivered to all subscribers):
+```
+MeshPacket {
+  from:       0xa2e1a8c4
+  to:         0xffffffff
+  id:         3827461829
+  hop_limit:  0            ← zeroed — gateway will not rebroadcast
+  hop_start:  3            ← preserved for mesh-distance observability
+  channel:    0
+  payload:    <encrypted Data protobuf>   (unchanged)
+}
+```
+
+The JSON topic mirror (`/json/LongFast/!a2e1a8c4`) is zeroed the same way — `hop_limit` is set to `0` in the JSON object.
+
 ## Development
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ -q   # no protobufs required — protobuf imports are mocked
+pytest tests/ --ignore=tests/test_container_smoke.py -q   # no Docker required
+pytest tests/ -q   # full suite including container smoke test (requires Docker)
 ```
 
 **Log output (INFO, text mode):**
 ```
-2024-03-30 14:23:47 INFO     [floodgate.zerohop] [ZEROHOP]  topic=msh/US/2/e/LongFast/!a2e1a8c4  channel=LongFast  encoding=e  hop 3→0  id=3827461829  from=!a2e1a8c4  to=^all
-2024-03-30 14:23:48 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  id=1234567890
-2024-03-30 14:24:47 INFO     [floodgate.exhook_server] Stats [last 60s]  zerohopped=142   passthru=3    noop=0    skipped=1050  errors=0    total=1195
+2026-04-01 14:23:47 INFO     [floodgate.zerohop] [ZEROHOP]  topic=msh/US/2/e/LongFast/!a2e1a8c4  channel=LongFast  encoding=e  hop 3→0  id=3827461829  from=!a2e1a8c4  to=^all
+2026-04-01 14:23:48 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  encoding=e  id=1234567890  from=!a2e1a8c4  to=^all
+2026-04-01 14:24:47 INFO     [floodgate.exhook_server] Stats [last 60s]  zerohopped=142   passthru=3    noop=0    skipped=1050  errors=0    total=1195
 ```
 
 ## Legal
