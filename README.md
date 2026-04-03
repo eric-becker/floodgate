@@ -172,10 +172,6 @@ The gRPC connection between EMQX and floodgate is **unencrypted** (no TLS). This
 
 The Kubernetes manifests in [k8s/](k8s/) use `type: ClusterIP` so neither port is externally reachable by default.
 
-### Docker Compose
-
-The included [docker-compose.yaml](docker-compose.yaml) is for **local development only**. It uses the default EMQX credentials (`admin`/`public`) and exposes ports on localhost. Do not use it in production — use the [k8s/](k8s/) manifests or a properly secured Docker deployment with non-default EMQX credentials.
-
 ### Container hardening
 
 The production container image runs as `nobody` (UID 65534) with a read-only filesystem, no Linux capabilities, and no privilege escalation. See [Dockerfile](Dockerfile) and [k8s/deployment.yaml](k8s/deployment.yaml).
