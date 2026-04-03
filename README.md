@@ -179,6 +179,27 @@ channel_whitelist:
   - "MyPrivateChannel"
 ```
 
+## Security
+
+### Network exposure
+
+| Port | Purpose | Exposure |
+|------|---------|----------|
+| `9000` (gRPC) | EMQX ExHook connection | **Internal only.** Bind to your private/cluster network. Never expose publicly. |
+| `8080` (HTTP) | Health check `/health` | **Internal only.** Operational stats — restrict to your monitoring network. |
+
+The gRPC connection between EMQX and floodgate is **unencrypted** (no TLS). This is acceptable when both services run in the same Kubernetes namespace or Docker network on a trusted private network. Do not route this port through a public-facing load balancer or ingress.
+
+The Kubernetes manifests in [k8s/](k8s/) use `type: ClusterIP` so neither port is externally reachable by default.
+
+### Docker Compose
+
+The included [docker-compose.yaml](docker-compose.yaml) is for **local development only**. It uses the default EMQX credentials (`admin`/`public`) and exposes ports on localhost. Do not use it in production — use the [k8s/](k8s/) manifests or a properly secured Docker deployment with non-default EMQX credentials.
+
+### Container hardening
+
+The production container image runs as `nobody` (UID 65534) with a read-only filesystem, no Linux capabilities, and no privilege escalation. See [Dockerfile](Dockerfile) and [k8s/deployment.yaml](k8s/deployment.yaml).
+
 ## Verifying operation
 
 ### Health endpoint
