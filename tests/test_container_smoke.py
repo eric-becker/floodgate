@@ -112,7 +112,7 @@ class TestContainerSmoke:
         _, body = _wait_for_health(f"http://localhost:{HEALTH_PORT}/health")
         data = json.loads(body)
         stats = data["stats"]
-        for key in ("zerohopped", "passthru", "noop", "skipped", "errors", "total"):
+        for key in ("zerohop", "passthru", "noop", "skipped", "errors", "total"):
             assert key in stats, f"missing stats key: {key}"
 
     def test_unknown_path_returns_404(self, running_container):
