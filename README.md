@@ -91,7 +91,7 @@ cd floodgate
 docker compose up --build -d
 ```
 
-See [docker-compose.yaml](docker-compose.yaml) for the ExHook registration curl command to run after startup.
+After startup, register the ExHook per the [Deployment](#deployment) instructions above.
 
 ### Kubernetes
 
