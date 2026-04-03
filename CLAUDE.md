@@ -67,6 +67,7 @@ After startup, register the ExHook in EMQX (see docker-compose.yaml header for t
 | `channel_whitelist` | `[]` | Channels exempt from zero-hop (whitelist mode). Empty = zero-hop everything. |
 | `log_level` | `INFO` | `INFO` logs per-message outcomes. `DEBUG` adds decode/gRPC internals. |
 | `log_format` | `text` | `text` (default) or `json` for Loki/Grafana. Override with `FLOODGATE_LOG_FORMAT` env var. |
+| `stats_log` | `true` | Log periodic stats summaries. Set `false` to disable. |
 
 ## Documentation and Test Discipline
 

@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
     "stats_interval_s": 60,
     "log_level": "INFO",
     "log_format": "text",   # "text" | "json"
+    "stats_log": True,
 }
 
 

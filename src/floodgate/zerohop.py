@@ -33,11 +33,11 @@ def _load_protos():
 @dataclass
 class AntifloodStats:
     """Thread-safe counters for observability."""
-    zerohopped: int = 0
-    passthru:   int = 0
-    noop:       int = 0
-    skipped:    int = 0
-    errors:     int = 0
+    zerohop:  int = 0
+    passthru: int = 0
+    noop:     int = 0
+    skipped:  int = 0
+    errors:   int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def inc(self, counter: str):
@@ -46,31 +46,31 @@ class AntifloodStats:
 
     @property
     def total(self) -> int:
-        return self.zerohopped + self.passthru + self.noop + self.skipped + self.errors
+        return self.zerohop + self.passthru + self.noop + self.skipped + self.errors
 
     def snapshot(self) -> dict:
         with self._lock:
             return {
-                "zerohopped": self.zerohopped,
-                "passthru":   self.passthru,
-                "noop":       self.noop,
-                "skipped":    self.skipped,
-                "errors":     self.errors,
-                "total":      self.total,
+                "zerohop":  self.zerohop,
+                "passthru": self.passthru,
+                "noop":     self.noop,
+                "skipped":  self.skipped,
+                "errors":   self.errors,
+                "total":    self.total,
             }
 
     def reset(self) -> dict:
         """Return a snapshot then reset all counters to zero."""
         with self._lock:
             snap = {
-                "zerohopped": self.zerohopped,
-                "passthru":   self.passthru,
-                "noop":       self.noop,
-                "skipped":    self.skipped,
-                "errors":     self.errors,
-                "total":      self.total,
+                "zerohop":  self.zerohop,
+                "passthru": self.passthru,
+                "noop":     self.noop,
+                "skipped":  self.skipped,
+                "errors":   self.errors,
+                "total":    self.total,
             }
-            self.zerohopped = self.passthru = self.noop = self.skipped = self.errors = 0
+            self.zerohop = self.passthru = self.noop = self.skipped = self.errors = 0
             return snap
 
 
@@ -83,34 +83,10 @@ stats = AntifloodStats()
 # ---------------------------------------------------------------------------
 
 def _fmt_node(node_id: int | None) -> str:
-    """Format a full Meshtastic node ID for display."""
+    """Format a Meshtastic node ID as !hex."""
     if node_id is None:
         return "?"
-    if node_id == 0xFFFFFFFF:
-        return "^all"
     return f"!{node_id:08x}"
-
-
-def _fmt_meta(meta: dict) -> str:
-    """Format packet metadata fields for a log line."""
-    parts = []
-    if meta.get("packet_id"):
-        parts.append(f"id={meta['packet_id']}")
-    if meta.get("sender") is not None:
-        parts.append(f"from={_fmt_node(meta['sender'])}")
-    if meta.get("destination") is not None:
-        parts.append(f"to={_fmt_node(meta['destination'])}")
-    if meta.get("hop_start"):
-        parts.append(f"hop_start={meta['hop_start']}")
-    if meta.get("via_mqtt"):
-        parts.append("via_mqtt=T")
-    # relay_node is only the low byte of the relaying node's ID
-    relay = meta.get("relay_node")
-    if relay:
-        parts.append(f"relay={relay & 0xFF:02x}")
-    if meta.get("next_hop"):
-        parts.append(f"next_hop={_fmt_node(meta['next_hop'])}")
-    return "  ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -306,14 +282,8 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
 def process_message(topic: str, payload: bytes, config: dict) -> bytes | None:
     """Process one MQTT message; return modified payload or None (pass-through).
 
-    Non-packet msh/ topics (map reports, stat topics, etc.) are silently
-    ignored and counted under 'skipped' in stats.
-
-    Processed packet outcomes are logged at INFO level:
-      [ZEROHOP]   modified, subscribers receive hop_limit=0
-      [PASSTHRU]  channel exempted by policy, subscribers receive original
-      [NOOP]      hop_limit was already 0, no change
-      [WARN]      payload could not be parsed — original forwarded unchanged
+    Outcomes logged at INFO: zerohop, passthru, noop, warn.
+    Non-packet topics silently skipped (counted in stats).
     """
     try:
         return _process_message_inner(topic, payload, config)
@@ -342,18 +312,21 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> bytes | 
     if not should_zerohop(config, channel):
         stats.inc("passthru")
         meta = _peek_meta(encoding, payload)
-        pkt_fields = _fmt_meta(meta)
+        relay = meta.get("relay_node")
         logger.info(
-            "[PASSTHRU] topic=%s  channel=%s%s",
-            topic, channel, f"  {pkt_fields}" if pkt_fields else "",
+            "passthru",
             extra={
-                "outcome":    "passthru",
-                "topic":      topic,
-                "channel":    channel,
-                "encoding":   encoding,
-                "packet_id":  meta.get("packet_id"),
-                "from_node":  _fmt_node(meta.get("sender")),
-                "to_node":    _fmt_node(meta.get("destination")),
+                "event":     "message",
+                "outcome":   "passthru",
+                "topic":     topic,
+                "channel":   channel,
+                "encoding":  encoding,
+                "id":        meta.get("packet_id"),
+                "from":      _fmt_node(meta.get("sender")),
+                "to":        _fmt_node(meta.get("destination")),
+                "hop_start": meta.get("hop_start"),
+                "relay":     f"{relay & 0xFF:02x}" if relay else None,
+                "via_mqtt":  meta.get("via_mqtt"),
             },
         )
         return None
@@ -363,58 +336,60 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> bytes | 
     else:
         modified, old_hop, meta = zerohop_protobuf(payload)
 
-    pkt_fields = _fmt_meta(meta)
-
     if modified is None and old_hop is None:
         stats.inc("errors")
         logger.warning(
-            "[WARN]     topic=%s  channel=%s  could not parse %d-byte payload",
-            topic, channel, len(payload),
+            "warn",
             extra={
-                "outcome":   "warn",
-                "topic":     topic,
-                "channel":   channel,
-                "encoding":  encoding,
-                "bytes":     len(payload),
+                "event":    "message",
+                "outcome":  "warn",
+                "topic":    topic,
+                "channel":  channel,
+                "encoding": encoding,
+                "bytes":    len(payload),
             },
         )
         return None
 
     if old_hop == 0:
         stats.inc("noop")
+        relay = meta.get("relay_node")
         logger.info(
-            "[NOOP]     topic=%s  channel=%s  hop_limit already 0%s",
-            topic, channel,
-            ("  " + pkt_fields) if pkt_fields else "",
+            "noop",
             extra={
-                "outcome":    "noop",
-                "topic":      topic,
-                "channel":    channel,
-                "encoding":   encoding,
-                "packet_id":  meta.get("packet_id"),
-                "from_node":  _fmt_node(meta.get("sender")),
-                "to_node":    _fmt_node(meta.get("destination")),
-                "hop_from":   0,
-                "hop_to":     0,
+                "event":     "message",
+                "outcome":   "noop",
+                "topic":     topic,
+                "channel":   channel,
+                "encoding":  encoding,
+                "id":        meta.get("packet_id"),
+                "from":      _fmt_node(meta.get("sender")),
+                "to":        _fmt_node(meta.get("destination")),
+                "hop_limit": 0,
+                "hop_start": meta.get("hop_start"),
+                "relay":     f"{relay & 0xFF:02x}" if relay else None,
+                "via_mqtt":  meta.get("via_mqtt"),
             },
         )
         return None
 
-    stats.inc("zerohopped")
+    stats.inc("zerohop")
+    relay = meta.get("relay_node")
     logger.info(
-        "[ZEROHOP]  topic=%s  channel=%s  encoding=%s  hop %d\u21920%s",
-        topic, channel, encoding, old_hop,
-        ("  " + pkt_fields) if pkt_fields else "",
+        "zerohop",
         extra={
-            "outcome":    "zerohop",
-            "topic":      topic,
-            "channel":    channel,
-            "encoding":   encoding,
-            "packet_id":  meta.get("packet_id"),
-            "from_node":  _fmt_node(meta.get("sender")),
-            "to_node":    _fmt_node(meta.get("destination")),
-            "hop_from":   old_hop,
-            "hop_to":     0,
+            "event":     "message",
+            "outcome":   "zerohop",
+            "topic":     topic,
+            "channel":   channel,
+            "encoding":  encoding,
+            "id":        meta.get("packet_id"),
+            "from":      _fmt_node(meta.get("sender")),
+            "to":        _fmt_node(meta.get("destination")),
+            "hop_limit": old_hop,
+            "hop_start": meta.get("hop_start"),
+            "relay":     f"{relay & 0xFF:02x}" if relay else None,
+            "via_mqtt":  meta.get("via_mqtt"),
         },
     )
     return modified

@@ -28,4 +28,8 @@ log_level: "INFO"
 
 # "text" (human-readable) or "json" (structured, for Loki/Grafana).
 # Override with FLOODGATE_LOG_FORMAT env var.
-log_format: "text"
+log_format: "json"
+
+# Log periodic stats summary (zerohop/passthru/noop counts).
+# Set false to disable stats log lines.
+stats_log: true

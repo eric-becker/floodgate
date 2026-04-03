@@ -77,13 +77,13 @@ class TestHealthEndpoint:
             _, body = _get(f"{base}/health")
             data = json.loads(body)
             stats = data["stats"]
-            for key in ("zerohopped", "passthru", "noop", "skipped", "errors", "total"):
+            for key in ("zerohop", "passthru", "noop", "skipped", "errors", "total"):
                 assert key in stats, f"missing key: {key}"
         finally:
             server.shutdown()
 
     def test_health_stats_reflect_counters(self):
-        packet_stats.zerohopped = 5
+        packet_stats.zerohop = 5
         packet_stats.passthru = 2
         packet_stats.noop = 1
 
@@ -91,7 +91,7 @@ class TestHealthEndpoint:
         try:
             _, body = _get(f"{base}/health")
             stats = json.loads(body)["stats"]
-            assert stats["zerohopped"] == 5
+            assert stats["zerohop"] == 5
             assert stats["passthru"] == 2
             assert stats["noop"] == 1
             assert stats["total"] == 8

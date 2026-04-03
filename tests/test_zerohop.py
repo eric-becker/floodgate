@@ -263,4 +263,6 @@ class TestPeekMeta:
         with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
             result = process_message("msh/US/2/json/LongFast/!aabbccdd", payload, config)
         assert result is None
-        assert "99999" in caplog.text
+        rec = caplog.records[-1]
+        assert getattr(rec, "id") == 99999
+        assert getattr(rec, "outcome") == "passthru"

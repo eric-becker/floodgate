@@ -23,14 +23,16 @@ Before:  hop_limit: 3  hop_start: 3
 After:   hop_limit: 0  hop_start: 3  ← hop_start preserved for observability
 ```
 
+See [Meshtastic Mesh Algorithm](https://meshtastic.org/docs/overview/mesh-algo/) for details on `hop_limit` and `hop_start`.
+
 Each message produces one outcome:
 
 | Outcome | Condition |
 |---------|-----------|
-| `[ZEROHOP]` | Channel matched policy, `hop_limit > 0` — zeroed |
-| `[NOOP]` | Channel matched policy, already `hop_limit=0` |
-| `[PASSTHRU]` | Channel exempt by policy — unchanged |
-| `[WARN]` | Payload parse failure — unchanged |
+| `zerohop` | Channel matched policy, `hop_limit > 0` — zeroed |
+| `noop` | Channel matched policy, already `hop_limit=0` |
+| `passthru` | Channel exempt by policy — unchanged |
+| `warn` | Payload parse failure — unchanged |
 
 ## Deployment
 
@@ -123,6 +125,7 @@ See [config.yaml](config.yaml) for a fully annotated example.
 | `grpc_port` | `9000` | gRPC listen port. |
 | `health_port` | `8080` | HTTP health check port. `GET /health` returns `{"status":"ok","stats":{...}}`. |
 | `stats_interval_s` | `60` | Stats log interval in seconds. |
+| `stats_log` | `true` | Log periodic stats summaries. Set `false` to disable. |
 | `log_level` | `INFO` | `INFO` shows per-message outcomes. `DEBUG` adds verbose internals. |
 | `log_format` | `text` | `text` for human-readable output, `json` for Loki/Grafana structured logging. Can also be set via `FLOODGATE_LOG_FORMAT` env var. |
 
@@ -190,7 +193,7 @@ curl -s http://localhost:8080/health | jq .
 {
   "status": "ok",
   "stats": {
-    "zerohopped": 142,
+    "zerohop": 142,
     "passthru": 3,
     "noop": 0,
     "skipped": 1050,
@@ -202,26 +205,28 @@ curl -s http://localhost:8080/health | jq .
 
 ### Log output
 
-Per-message outcomes are logged at **INFO** — no special flags required:
+Per-message outcomes are logged at **INFO** — no special flags required. Field names match [Meshtastic protobuf terminology](https://meshtastic.org/docs/overview/mesh-algo/) (`hop_limit`, `hop_start`, `from`, `to`, `id`).
 
+**Text mode** (default):
 ```
-2026-04-01 12:00:01 INFO     [floodgate.zerohop] [ZEROHOP]  topic=msh/US/2/e/LongFast/!a2e1a8c4  channel=LongFast  encoding=e  hop 3→0  id=3827461829  from=!a2e1a8c4  to=^all
-2026-04-01 12:00:02 INFO     [floodgate.zerohop] [NOOP]     topic=msh/US/2/e/LongFast/!b3c4d5e6  channel=LongFast  encoding=e  hop 0→0  id=2019283746  from=!b3c4d5e6  to=^all
-2026-04-01 12:00:15 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  encoding=e  id=1234567890  from=!a2e1a8c4  to=^all
-2026-04-01 12:01:01 INFO     [floodgate.exhook_server] Stats [last 60s]  zerohopped=142   passthru=1    noop=0    skipped=1050  errors=0    total=1193
-```
-
-For **structured JSON output** (Loki/Grafana ingestion), set `log_format: json` in config or:
-
-```bash
-FLOODGATE_LOG_FORMAT=json floodgate --config config.yaml
+2026-04-01 12:00:01 INFO     [floodgate.zerohop] [ZEROHOP] topic=msh/US/2/e/LongFast/!a2e1a8c4 channel=LongFast encoding=e id=3827461829 from=!a2e1a8c4 to=!ffffffff hop_limit=3 hop_start=3
+2026-04-01 12:00:02 INFO     [floodgate.zerohop] [NOOP] topic=msh/US/2/e/LongFast/!b3c4d5e6 channel=LongFast encoding=e id=2019283746 from=!b3c4d5e6 to=!ffffffff hop_limit=0 hop_start=3
+2026-04-01 12:00:15 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4 channel=MyPrivate encoding=e id=1234567890 from=!a2e1a8c4 to=!ffffffff
+2026-04-01 12:01:01 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=1 noop=0 skipped=1050 errors=0 total=1193
 ```
 
-Each log line is a JSON object with structured fields (`outcome`, `channel`, `packet_id`, `from_node`, `hop_from`, etc.) usable in LogQL:
+**JSON mode** (`log_format: json` or `FLOODGATE_LOG_FORMAT=json`):
+```json
+{"timestamp":"2026-04-01T12:00:01Z","level":"INFO","name":"floodgate.zerohop","message":"zerohop","event":"message","outcome":"zerohop","topic":"msh/US/2/e/LongFast/!a2e1a8c4","channel":"LongFast","encoding":"e","id":3827461829,"from":"!a2e1a8c4","to":"!ffffffff","hop_limit":3,"hop_start":3}
+```
+
+JSON output is optimized for Loki/Grafana: the `message` field is just the outcome tag, all data is in structured top-level fields. Example LogQL queries:
 
 ```
-{job="floodgate"} | json | outcome="zerohop"
-{job="floodgate"} | json | channel="LongFast"
+{container="floodgate"} | json | outcome="zerohop"
+{container="floodgate"} | json | channel="LongFast"
+{container="floodgate"} | json | from="!a2e1a8c4"
+sum by (outcome) (count_over_time({container="floodgate"} | json | event="message" [5m]))
 ```
 
 ### Kubernetes
@@ -273,9 +278,9 @@ pytest tests/ -q   # full suite including container smoke test (requires Docker)
 
 **Log output (INFO, text mode):**
 ```
-2026-04-01 14:23:47 INFO     [floodgate.zerohop] [ZEROHOP]  topic=msh/US/2/e/LongFast/!a2e1a8c4  channel=LongFast  encoding=e  hop 3→0  id=3827461829  from=!a2e1a8c4  to=^all
-2026-04-01 14:23:48 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4  channel=MyPrivate  encoding=e  id=1234567890  from=!a2e1a8c4  to=^all
-2026-04-01 14:24:47 INFO     [floodgate.exhook_server] Stats [last 60s]  zerohopped=142   passthru=3    noop=0    skipped=1050  errors=0    total=1195
+2026-04-01 14:23:47 INFO     [floodgate.zerohop] [ZEROHOP] topic=msh/US/2/e/LongFast/!a2e1a8c4 channel=LongFast encoding=e id=3827461829 from=!a2e1a8c4 to=!ffffffff hop_limit=3 hop_start=3
+2026-04-01 14:23:48 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4 channel=MyPrivate encoding=e id=1234567890 from=!a2e1a8c4 to=!ffffffff
+2026-04-01 14:24:47 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=3 noop=0 skipped=1050 errors=0 total=1195
 ```
 
 ## Legal
