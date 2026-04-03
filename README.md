@@ -12,21 +12,8 @@ floodgate fills this gap. It runs alongside your self-hosted EMQX and enforces z
 
 ## How It Works
 
-```mermaid
-flowchart TD
-    GW(["LoRa Gateway"])
-    EMQX(["EMQX"])
-    FG(["floodgate"])
-    SUB(["Subscribers"])
-
-    GW   -->|"PUBLISH  hop_limit=3"| EMQX
-    EMQX <-->|"ExHook gRPC"| FG
-    EMQX -->|"deliver  hop_limit=0"| SUB
-
-    style GW   fill:#0d9488,stroke:#0f766e,color:#fff
-    style EMQX fill:#7c3aed,stroke:#6d28d9,color:#fff
-    style FG   fill:#059669,stroke:#047857,color:#fff
-    style SUB  fill:#d97706,stroke:#b45309,color:#fff
+```
+Gateway → EMQX → [ExHook gRPC] → floodgate → modified payload → EMQX → Subscribers
 ```
 
 Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the zeroed packet transparently. Meshtastic gateways use the protobuf (`/e/`) topic for LoRa downlink. The JSON (`/json/`) topic is a human-readable mirror that some clients publish alongside for monitoring tools like MQTT Explorer — floodgate zero-hops both for consistency.
