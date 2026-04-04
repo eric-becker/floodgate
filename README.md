@@ -70,13 +70,15 @@ curl -X POST http://localhost:18083/api/v5/exhooks \
   -d '{
     "name": "floodgate",
     "url": "http://YOUR_HOST_IP:9000",
-    "auto_reconnect": "60s",
-    "failed_action": "ignore"
+    "auto_reconnect": "5s",
+    "failed_action": "deny"
   }'
 ```
 
 If floodgate is on the same Docker network as EMQX, use the container name instead of an IP:
 `"url": "http://floodgate:9000"`
+
+See [ExHook failure policy](#exhook-failure-policy) for why `deny` is recommended.
 
 Verify registration in the EMQX dashboard under **Management → ExHook** or:
 
@@ -97,7 +99,7 @@ After startup, register the ExHook per the [Deployment](#deployment) instruction
 
 ### Kubernetes
 
-See [k8s/](k8s/) — Deployment, Service, and ConfigMap. Register the ExHook at `http://floodgate:9000` after applying.
+See [k8s/](k8s/) — Deployment, Service, and ConfigMap. The Deployment uses a rolling update strategy for zero-downtime upgrades. Register the ExHook at `http://floodgate:9000` after applying.
 
 ### Source install
 
@@ -161,6 +163,21 @@ channel_policy: "whitelist"
 channel_whitelist:
   - "MyPrivateChannel"
 ```
+
+### ExHook failure policy
+
+EMQX's `failed_action` controls what happens to MQTT messages when floodgate is unreachable (crash, restart, upgrade):
+
+| `failed_action` | Floodgate down | Trade-off |
+|-----------------|----------------|-----------|
+| **`deny`** (recommended) | Messages dropped — not delivered to subscribers | Mesh protected, brief MQTT gap |
+| `ignore` | Messages delivered at full `hop_limit` | MQTT uninterrupted, mesh floods |
+
+**We recommend `deny`.** Dropped MQTT messages are a brief blind spot for subscribers; uncontrolled mesh flooding is real radio damage affecting every node in range. With `restart: unless-stopped` and `auto_reconnect: 5s`, the gap is typically under 20 seconds.
+
+**Startup ordering:** In Docker Compose, EMQX should `depends_on` floodgate (not the other way around). Floodgate is a gRPC server — it starts first, listens on port 9000, and waits. EMQX connects to it after boot. See [docker-compose.yaml](docker-compose.yaml) for the reference configuration.
+
+**Kubernetes** handles this differently: the Deployment uses a rolling update strategy (`maxUnavailable: 0, maxSurge: 1`) so the new pod starts and passes its readiness probe before the old pod is terminated. EMQX reconnects to the new pod via the Service — zero-downtime upgrades with no message gap.
 
 ## Security
 
