@@ -44,9 +44,46 @@ ruff check src/ tests/
 
 Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`
 
-## Releases
+## Branching strategy
 
-Maintainers tag releases on `main` as `vMAJOR.MINOR.PATCH`. The release workflow runs lint, the full test matrix, and the container smoke test before creating a GitHub release automatically.
+- `main` — stable, tagged releases only
+- Feature branches: `feat/<name>`, `fix/<name>`, `docs/<name>`, `chore/<name>`
+- Branch from `main`, PR back to `main`, squash-merge
+- Delete feature branches after merge (GitHub auto-deletes remote; clean local with `git branch -d`)
+
+## Release workflow
+
+Releases use semantic versioning (`v0.2.1`, `v1.0.0`, etc.).
+
+### Steps
+
+1. Merge PR(s) to `main`
+2. Tag the release:
+   ```bash
+   git checkout main && git pull
+   git tag v0.X.Y
+   git push origin v0.X.Y
+   ```
+3. Two workflows trigger automatically on tag push:
+   - **Release** (`release.yml`): lint → test → smoke → creates a GitHub Release with auto-generated notes
+   - **Docker** (`docker-publish.yml`): builds multi-arch image (amd64 + arm64) and pushes to `ghcr.io/eric-becker/floodgate:<version>`
+4. Update downstream deployments to reference the new image tag
+
+### What gets published
+
+| Trigger | Image tags pushed to GHCR |
+|---------|---------------------------|
+| Push to `main` | `latest` |
+| Tag `v0.2.1` | `0.2.1`, `0.2`, `latest` |
+| PR (build-only) | `pr-<number>` (not pushed) |
+
+### Version bumping
+
+- Patch (`v0.2.0` → `v0.2.1`): bug fixes, logging changes, config additions
+- Minor (`v0.2.1` → `v0.3.0`): new features, behavior changes
+- Major (`v0.3.0` → `v1.0.0`): breaking config or API changes
+
+The version in `pyproject.toml` is the Python package version and does not need to match the Docker image tag — the git tag is the source of truth for releases.
 
 ## Protobuf compatibility
 

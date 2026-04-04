@@ -50,13 +50,14 @@ docker compose up --build
 
 After startup, register the ExHook in EMQX (see README Deployment section for the curl commands).
 
-## Branching & Commit Strategy
+## Branching & Release Strategy
 
 - `main` — stable, tagged releases only
 - `feat/<name>`, `fix/<name>`, `docs/<name>`, `chore/<name>` — branch from main, PR back to main
 - Commits: conventional format — `feat:`, `fix:`, `docs:`, `test:`, `chore:`
-- PRs: squash-merge to main
-- Releases: semantic versioning (`v0.1.0`, ...), GitHub release + git tag
+- PRs: squash-merge to main; delete branch after merge
+- Releases: `git tag vX.Y.Z && git push origin vX.Y.Z` triggers release + Docker publish to GHCR
+- See [CONTRIBUTING.md](CONTRIBUTING.md) for full release workflow details
 
 ## Key Config Options
 
