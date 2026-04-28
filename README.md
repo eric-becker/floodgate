@@ -33,6 +33,7 @@ Each message produces one outcome:
 | `noop` | Channel matched policy, already `hop_limit=0` |
 | `passthru` | Channel exempt by policy — unchanged |
 | `warn` | Payload parse failure — unchanged |
+| `skipped` | Non-packet topic (map report, stat, etc.) — silently ignored |
 
 ## Deployment
 
