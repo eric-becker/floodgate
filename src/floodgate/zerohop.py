@@ -82,10 +82,12 @@ stats = AntifloodStats()
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fmt_node(node_id: int | None) -> str:
+def _fmt_node(node_id) -> str:
     """Format a Meshtastic node ID as !hex."""
     if node_id is None:
         return "?"
+    if isinstance(node_id, str):
+        return node_id
     return f"!{node_id:08x}"
 
 
