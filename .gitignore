@@ -30,3 +30,6 @@ protobufs/*
 
 # Ansible collections / roles (may be installed locally when running playbooks from this dir)
 .ansible/
+
+# Claude Code local settings
+.claude/
