@@ -5,11 +5,27 @@ import logging
 from unittest.mock import patch
 
 from floodgate.zerohop import (
+    _fmt_node,
     _peek_meta,
     parse_meshtastic_topic,
     process_message,
     zerohop_json,
 )
+
+
+class TestFmtNode:
+
+    def test_int_node_id(self):
+        assert _fmt_node(0xDEADBEEF) == "!deadbeef"
+
+    def test_broadcast(self):
+        assert _fmt_node(0xFFFFFFFF) == "!ffffffff"
+
+    def test_none(self):
+        assert _fmt_node(None) == "?"
+
+    def test_string_passthrough(self):
+        assert _fmt_node("!f6acb04f") == "!f6acb04f"
 
 
 class TestParseMetastasticTopic:
@@ -35,26 +51,26 @@ class TestParseMetastasticTopic:
 
     def test_deep_topic_three_prefix_parts(self):
         # msh/{country}/{region}/2/e/LongFast/!nodeId — 3-part prefix
-        assert parse_meshtastic_topic("msh/US/FL/2/e/LongFast/!16cec9ac") == ("LongFast", "e")
+        assert parse_meshtastic_topic("msh/US/CA/2/e/LongFast/!16cec9ac") == ("LongFast", "e")
 
     def test_deep_topic_four_prefix_parts(self):
         # msh/{country}/{region}/{area}/2/e/LongFast/!nodeId — 4-part prefix
-        assert parse_meshtastic_topic("msh/US/FL/LWS/2/e/LongFast/!087a5a9c") == ("LongFast", "e")
+        assert parse_meshtastic_topic("msh/US/CA/BAY/2/e/LongFast/!087a5a9c") == ("LongFast", "e")
 
     def test_json_encoding_deep(self):
-        assert parse_meshtastic_topic("msh/US/FL/2/json/LongFast/!deadbeef") == ("LongFast", "json")
+        assert parse_meshtastic_topic("msh/US/CA/2/json/LongFast/!deadbeef") == ("LongFast", "json")
 
     def test_stat_topic_not_a_packet(self):
-        # Status topics like msh/US/FL don't end with !nodeId
-        assert parse_meshtastic_topic("msh/US/FL") is None
+        # Status topics without !nodeId suffix
+        assert parse_meshtastic_topic("msh/US/CA") is None
 
     def test_no_nodeid_suffix(self):
         # msh/ prefix but no !nodeId at the end
-        assert parse_meshtastic_topic("msh/US/FL/stat/somenode") is None
+        assert parse_meshtastic_topic("msh/US/CA/stat/somenode") is None
 
     def test_map_report_topic(self):
         # Map report published directly to region root — not a packet
-        assert parse_meshtastic_topic("msh/US/FL/map") is None
+        assert parse_meshtastic_topic("msh/US/CA/map") is None
 
     def test_unknown_encoding_returns_none(self):
         # Unknown encoding segment
@@ -118,6 +134,16 @@ class TestZerohopJson:
         assert modified is None
         assert old_hop is None
 
+    def test_string_node_ids_in_json(self):
+        """JSON payloads may have string node IDs instead of integers."""
+        data = {"from": "!f6acb04f", "to": "!ffffffff", "id": 12345,
+                "hop_limit": 3, "hop_start": 3}
+        payload = json.dumps(data).encode()
+        modified, old_hop, meta = zerohop_json(payload)
+        assert old_hop == 3
+        assert modified is not None
+        assert meta["sender"] == "!f6acb04f"
+
     def test_preserves_other_fields(self):
         modified, _, _ = zerohop_json(self._payload(hop_limit=3))
         data = json.loads(modified)
@@ -142,29 +168,28 @@ class TestProcessMessage:
         assert process_message("other/topic", b"data", config) is None
 
     def test_msh_status_topic_silently_skipped(self):
-        # msh/US/FL (no !nodeId) — map report topic, must be silently ignored
         config = self._config()
-        assert process_message("msh/US/FL", b"data", config) is None
+        assert process_message("msh/US/CA", b"data", config) is None
 
     def test_whitelist_empty_zerohops_proto(self):
         config = self._config(policy="whitelist")
         with patch("floodgate.zerohop.zerohop_protobuf") as mock_zh:
             mock_zh.return_value = (b"modified", 3, {})
-            result = process_message("msh/US/FL/2/e/LongFast/!1234", b"proto", config)
+            result = process_message("msh/US/CA/2/e/LongFast/!1234", b"proto", config)
         assert result == b"modified"
 
     def test_whitelist_empty_zerohops_json(self):
         config = self._config(policy="whitelist")
         with patch("floodgate.zerohop.zerohop_json") as mock_zh:
             mock_zh.return_value = (b'{"hop_limit":0}', 3, {})
-            result = process_message("msh/US/FL/2/json/LongFast/!1234", b"json", config)
+            result = process_message("msh/US/CA/2/json/LongFast/!1234", b"json", config)
         assert result == b'{"hop_limit":0}'
 
     def test_whitelist_empty_zerohops_deep_topic(self):
         config = self._config(policy="whitelist")
         with patch("floodgate.zerohop.zerohop_protobuf") as mock_zh:
             mock_zh.return_value = (b"modified", 3, {})
-            result = process_message("msh/US/FL/LWS/2/e/LongFast/!16cec9ac", b"proto", config)
+            result = process_message("msh/US/CA/BAY/2/e/LongFast/!16cec9ac", b"proto", config)
         assert result == b"modified"
 
     def test_whitelist_bypasses_listed_channel(self):
@@ -202,6 +227,15 @@ class TestProcessMessage:
             mock_zh.return_value = (None, None, {})
             result = process_message("msh/US/2/e/LongFast/!1234", b"bad", config)
         assert result is None
+
+    def test_json_string_node_ids_no_crash(self):
+        """JSON payloads with string node IDs must not crash _fmt_node."""
+        config = self._config(policy="whitelist")
+        meta = {"sender": "!f6acb04f", "destination": "!ffffffff", "packet_id": 99}
+        with patch("floodgate.zerohop.zerohop_json") as mock_zh:
+            mock_zh.return_value = (b'{"hop_limit":0}', 3, meta)
+            result = process_message("msh/US/2/json/LongFast/!f6acb04f", b"json", config)
+        assert result == b'{"hop_limit":0}'
 
     def test_meta_fields_formatted(self):
         config = self._config(policy="whitelist")

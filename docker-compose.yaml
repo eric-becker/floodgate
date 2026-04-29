@@ -1,6 +1,6 @@
 services:
   emqx:
-    image: emqx/emqx:5.8.7
+    image: emqx/emqx:6.1.1
     ports:
       - "1883:1883"     # MQTT
       - "18083:18083"   # Dashboard / REST API
@@ -8,17 +8,24 @@ services:
       EMQX_NAME: "emqx"
     volumes:
       - emqx-data:/opt/emqx/data
+    depends_on:
+      floodgate:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 5s
+      timeout: 25s
+      retries: 5
 
   floodgate:
     build: .
+    restart: unless-stopped
     ports:
       - "8080:8080"     # Health check / stats
     environment:
       FLOODGATE_CONFIG: /app/config.yaml
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-    depends_on:
-      - emqx
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 30s
