@@ -183,7 +183,7 @@ The production container image runs as `nobody` (UID 65534) with a read-only fil
 
 ### Health endpoint
 
-floodgate exposes a health check at `GET /health` on port 8080 (configurable via `health_port`):
+floodgate exposes a health check at `GET /health` on port 8080 (configurable via `health_port`). Stats are cumulative lifetime counters that persist across stats reporter intervals:
 
 ```bash
 curl -s http://localhost:8080/health | jq .
