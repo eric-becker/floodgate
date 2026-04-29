@@ -5,11 +5,27 @@ import logging
 from unittest.mock import patch
 
 from floodgate.zerohop import (
+    _fmt_node,
     _peek_meta,
     parse_meshtastic_topic,
     process_message,
     zerohop_json,
 )
+
+
+class TestFmtNode:
+
+    def test_int_node_id(self):
+        assert _fmt_node(0xDEADBEEF) == "!deadbeef"
+
+    def test_broadcast(self):
+        assert _fmt_node(0xFFFFFFFF) == "!ffffffff"
+
+    def test_none(self):
+        assert _fmt_node(None) == "?"
+
+    def test_string_passthrough(self):
+        assert _fmt_node("!f6acb04f") == "!f6acb04f"
 
 
 class TestParseMetastasticTopic:
@@ -118,6 +134,16 @@ class TestZerohopJson:
         assert modified is None
         assert old_hop is None
 
+    def test_string_node_ids_in_json(self):
+        """JSON payloads may have string node IDs instead of integers."""
+        data = {"from": "!f6acb04f", "to": "!ffffffff", "id": 12345,
+                "hop_limit": 3, "hop_start": 3}
+        payload = json.dumps(data).encode()
+        modified, old_hop, meta = zerohop_json(payload)
+        assert old_hop == 3
+        assert modified is not None
+        assert meta["sender"] == "!f6acb04f"
+
     def test_preserves_other_fields(self):
         modified, _, _ = zerohop_json(self._payload(hop_limit=3))
         data = json.loads(modified)
@@ -201,6 +227,15 @@ class TestProcessMessage:
             mock_zh.return_value = (None, None, {})
             result = process_message("msh/US/2/e/LongFast/!1234", b"bad", config)
         assert result is None
+
+    def test_json_string_node_ids_no_crash(self):
+        """JSON payloads with string node IDs must not crash _fmt_node."""
+        config = self._config(policy="whitelist")
+        meta = {"sender": "!f6acb04f", "destination": "!ffffffff", "packet_id": 99}
+        with patch("floodgate.zerohop.zerohop_json") as mock_zh:
+            mock_zh.return_value = (b'{"hop_limit":0}', 3, meta)
+            result = process_message("msh/US/2/json/LongFast/!f6acb04f", b"json", config)
+        assert result == b'{"hop_limit":0}'
 
     def test_meta_fields_formatted(self):
         config = self._config(policy="whitelist")
