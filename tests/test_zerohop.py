@@ -21,10 +21,17 @@ from floodgate.zerohop import (
 # parametrized smoke test, and individual tests can load them by filename
 # for detailed assertions.
 PAYLOADS_DIR = Path(__file__).parent / "payloads"
+PROTOBUF_PAYLOADS_DIR = PAYLOADS_DIR / "protobuf"
 
 
 def _list_json_payloads():
     return sorted(PAYLOADS_DIR.glob("*.json"))
+
+
+def _list_protobuf_payloads():
+    if not PROTOBUF_PAYLOADS_DIR.exists():
+        return []
+    return sorted(PROTOBUF_PAYLOADS_DIR.glob("*.bin"))
 
 
 def _load_json_payload(name):
@@ -498,10 +505,10 @@ class TestProcessMessageUnmockedJson:
         ids=lambda p: p.stem,
     )
     def test_real_world_payload_smoke(self, payload_path, caplog):
-        """Smoke test: every JSON file in tests/fixtures/json_payloads must
-        pass through process_message without crashing and produce exactly
-        one valid outcome record. Drop new samples into the directory to
-        extend coverage automatically.
+        """Smoke test: every JSON file in tests/payloads/ must pass through
+        process_message without crashing and produce exactly one valid
+        outcome record. Drop new samples into the directory to extend
+        coverage automatically.
         """
         config = self._config(policy="whitelist")
         payload = payload_path.read_bytes()
@@ -544,3 +551,57 @@ class TestProcessMessageUnmockedJson:
         assert getattr(rec[0], "from") == "!9d5eeaf4"
         assert getattr(rec[0], "to") == "!ffffffff"
         assert getattr(rec[0], "hop_limit") == 0
+
+
+try:
+    import meshtastic  # noqa: F401
+    _HAS_MESHTASTIC = True
+except ImportError:
+    _HAS_MESHTASTIC = False
+
+
+@pytest.mark.skipif(
+    not _HAS_MESHTASTIC,
+    reason="Meshtastic protobufs not generated. Run scripts/generate_protos.sh",
+)
+class TestProcessMessageUnmockedProtobuf:
+    """Full-path tests: real binary /e/ ServiceEnvelope payloads through
+    process_message, no mocks. Exercises zerohop_protobuf end-to-end
+    against samples captured from the public broker.
+
+    The /e/ topic is what Meshtastic firmware actually uses on the mesh —
+    /json/ is a debug mirror published by some gateways. These tests
+    exercise the path that matters for production behavior.
+    """
+
+    def _config(self, policy="whitelist", whitelist=None, blacklist=None):
+        return {
+            "channel_policy": policy,
+            "_whitelist_set": set(whitelist or []),
+            "_blacklist_set": set(blacklist or []),
+            "channel_whitelist": whitelist or [],
+            "channel_blacklist": blacklist or [],
+        }
+
+    @pytest.mark.parametrize(
+        "payload_path",
+        _list_protobuf_payloads(),
+        ids=lambda p: p.stem,
+    )
+    def test_real_world_payload_smoke(self, payload_path, caplog):
+        """Smoke test: every .bin file in tests/payloads/protobuf/ must
+        pass through process_message without crashing and produce exactly
+        one valid outcome record. Drop new samples into the directory to
+        extend coverage automatically.
+        """
+        config = self._config(policy="whitelist")
+        payload = payload_path.read_bytes()
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            process_message(
+                "msh/US/2/e/LongFast/!00000000", payload, config,
+            )
+        outcome_records = [r for r in caplog.records if hasattr(r, "outcome")]
+        assert len(outcome_records) == 1
+        assert getattr(outcome_records[0], "outcome") in (
+            "zerohop", "noop", "passthru", "warn",
+        )
