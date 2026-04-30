@@ -300,3 +300,176 @@ class TestPeekMeta:
         rec = caplog.records[-1]
         assert getattr(rec, "id") == 99999
         assert getattr(rec, "outcome") == "passthru"
+
+
+class TestProcessMessageUnmockedJson:
+    """Feed real JSON payloads through the full process_message path
+    WITHOUT mocking zerohop_json or zerohop_protobuf.  This exercises the
+    complete decode → modify → log pipeline end-to-end.
+    """
+
+    def _config(self, policy="whitelist", whitelist=None, blacklist=None):
+        return {
+            "channel_policy": policy,
+            "_whitelist_set": set(whitelist or []),
+            "_blacklist_set": set(blacklist or []),
+            "channel_whitelist": whitelist or [],
+            "channel_blacklist": blacklist or [],
+        }
+
+    def _json_payload(self, **overrides):
+        """Standard Meshtastic JSON payload with integer node IDs."""
+        data = {
+            "from": 305419896,       # 0x12345678
+            "to": 4294967295,        # 0xFFFFFFFF (broadcast)
+            "id": 1700391097,
+            "hop_start": 5,
+            "hops_away": 0,
+            "channel": 1,
+            "type": "text",
+        }
+        data.update(overrides)
+        return json.dumps(data).encode()
+
+    # -- Task 3: Standard cases ------------------------------------------------
+
+    def test_zerohop_integer_node_ids(self, caplog):
+        config = self._config(policy="whitelist")
+        payload = self._json_payload()
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!12345678", payload, config)
+        assert result is not None
+        assert json.loads(result)["hop_limit"] == 0
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "zerohop"
+        assert getattr(rec, "channel") == "LongFast"
+        assert getattr(rec, "encoding") == "json"
+
+    def test_zerohop_string_node_ids(self, caplog):
+        """Regression for #24: string node IDs must not crash _fmt_node."""
+        config = self._config(policy="whitelist")
+        data = {
+            "from": "!f6acb04f",
+            "to": "!ffffffff",
+            "id": 12345,
+            "hop_limit": 3,
+            "hop_start": 3,
+        }
+        payload = json.dumps(data).encode()
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!f6acb04f", payload, config)
+        assert result is not None
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "zerohop"
+        assert getattr(rec, "from") == "!f6acb04f"
+
+    def test_noop_when_hops_away_equals_hop_start(self, caplog):
+        config = self._config(policy="whitelist")
+        payload = self._json_payload(hop_start=5, hops_away=5)
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!12345678", payload, config)
+        assert result is None
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "noop"
+
+    def test_explicit_hop_limit_zero_is_noop(self, caplog):
+        config = self._config(policy="whitelist")
+        payload = self._json_payload(hop_limit=0)
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!12345678", payload, config)
+        assert result is None
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "noop"
+
+    def test_missing_optional_fields(self, caplog):
+        config = self._config(policy="whitelist")
+        data = {"from": 305419896, "to": 4294967295, "id": 999, "hop_limit": 3}
+        payload = json.dumps(data).encode()
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!12345678", payload, config)
+        assert result is not None
+        assert json.loads(result)["hop_limit"] == 0
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "zerohop"
+        assert getattr(rec, "hop_start") is None
+
+    def test_malformed_json_returns_none(self, caplog):
+        config = self._config(policy="whitelist")
+        with caplog.at_level(logging.WARNING, logger="floodgate.zerohop"):
+            result = process_message(
+                "msh/US/2/json/LongFast/!12345678",
+                b"not valid json {{{{",
+                config,
+            )
+        assert result is None
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "warn"
+
+    def test_partial_json_missing_required_hop_fields(self, caplog):
+        """Payload with from/to/id but no hop_limit/hop_start/hops_away → noop."""
+        config = self._config(policy="whitelist")
+        data = {"from": 305419896, "to": 4294967295, "id": 42}
+        payload = json.dumps(data).encode()
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!12345678", payload, config)
+        assert result is None
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "noop"
+
+    def test_edge_case_from_zero(self, caplog):
+        config = self._config(policy="whitelist")
+        payload = self._json_payload(**{"from": 0})
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!00000000", payload, config)
+        assert result is not None
+        rec = caplog.records[-1]
+        assert getattr(rec, "from") == "!00000000"
+
+    def test_edge_case_to_zero(self, caplog):
+        config = self._config(policy="whitelist")
+        payload = self._json_payload(to=0)
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!12345678", payload, config)
+        assert result is not None
+        rec = caplog.records[-1]
+        assert getattr(rec, "to") == "!00000000"
+
+    # -- Task 4: Passthru path ------------------------------------------------
+
+    def test_passthru_with_real_payload(self, caplog):
+        config = self._config(policy="whitelist", whitelist=["LongFast"])
+        payload = self._json_payload()
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!12345678", payload, config)
+        assert result is None
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "passthru"
+        assert getattr(rec, "id") == 1700391097
+
+    def test_passthru_string_node_ids(self, caplog):
+        """Passthru with string node IDs must not crash _fmt_node."""
+        config = self._config(policy="whitelist", whitelist=["LongFast"])
+        data = {
+            "from": "!f6acb04f",
+            "to": "!ffffffff",
+            "id": 12345,
+            "hop_limit": 3,
+            "hop_start": 3,
+        }
+        payload = json.dumps(data).encode()
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!f6acb04f", payload, config)
+        assert result is None
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "passthru"
+        assert getattr(rec, "from") == "!f6acb04f"
+
+    def test_blacklist_zerohop_json(self, caplog):
+        config = self._config(policy="blacklist", blacklist=["LongFast"])
+        payload = self._json_payload()
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!12345678", payload, config)
+        assert result is not None
+        assert json.loads(result)["hop_limit"] == 0
+        rec = caplog.records[-1]
+        assert getattr(rec, "outcome") == "zerohop"
