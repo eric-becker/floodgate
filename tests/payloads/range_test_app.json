@@ -1,0 +1,19 @@
+{
+  "channel": 0,
+  "from": 2640243444,
+  "id": 1455581347,
+  "payload": {
+    "decoded": {
+      "payload": "c2VxIDM2",
+      "portnum": "RANGE_TEST_APP"
+    },
+    "hop_limit": 3,
+    "rx_rssi": -108,
+    "rx_snr": -11.25,
+    "rx_time": 1714392055,
+    "want_ack": false
+  },
+  "sender": "!9d5f3af4",
+  "to": 4294967295,
+  "type": "packet"
+}

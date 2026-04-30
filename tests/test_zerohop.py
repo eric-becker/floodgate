@@ -2,7 +2,10 @@
 
 import json
 import logging
+from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from floodgate.zerohop import (
     _fmt_node,
@@ -12,31 +15,20 @@ from floodgate.zerohop import (
     zerohop_json,
 )
 
-# Real-world Meshtastic JSON sample payloads, captured from gateways publishing
-# to /json/ topics. Use as fixtures for tests that exercise common portnums.
-# Note: gateway-published JSON nests transport metadata (hop_limit, rx_rssi, etc.)
-# inside `payload`, not at the top level. zerohop_json currently only inspects
-# the top level — see test_range_test_app_real_world_payload.
+# Directory of real-world Meshtastic JSON payloads captured from gateways.
+# Each file is the raw JSON exactly as published on /json/ topics. Drop new
+# samples in to extend coverage — they're picked up automatically by the
+# parametrized smoke test, and individual tests can load them by filename
+# for detailed assertions.
+PAYLOADS_DIR = Path(__file__).parent / "payloads"
 
-RANGE_TEST_APP_JSON = {
-    "channel": 0,
-    "from": 2640243444,
-    "id": 1455581347,
-    "payload": {
-        "decoded": {
-            "payload": "c2VxIDM2",
-            "portnum": "RANGE_TEST_APP",
-        },
-        "hop_limit": 3,
-        "rx_rssi": -108,
-        "rx_snr": -11.25,
-        "rx_time": 1714392055,
-        "want_ack": False,
-    },
-    "sender": "!9d5f3af4",
-    "to": 4294967295,
-    "type": "packet",
-}
+
+def _list_json_payloads():
+    return sorted(PAYLOADS_DIR.glob("*.json"))
+
+
+def _load_json_payload(name):
+    return (PAYLOADS_DIR / name).read_bytes()
 
 
 class TestFmtNode:
@@ -500,6 +492,29 @@ class TestProcessMessageUnmockedJson:
         rec = caplog.records[-1]
         assert getattr(rec, "outcome") == "zerohop"
 
+    @pytest.mark.parametrize(
+        "payload_path",
+        _list_json_payloads(),
+        ids=lambda p: p.stem,
+    )
+    def test_real_world_payload_smoke(self, payload_path, caplog):
+        """Smoke test: every JSON file in tests/fixtures/json_payloads must
+        pass through process_message without crashing and produce exactly
+        one valid outcome record. Drop new samples into the directory to
+        extend coverage automatically.
+        """
+        config = self._config(policy="whitelist")
+        payload = payload_path.read_bytes()
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            process_message(
+                "msh/US/2/json/LongFast/!00000000", payload, config,
+            )
+        outcome_records = [r for r in caplog.records if hasattr(r, "outcome")]
+        assert len(outcome_records) == 1
+        assert getattr(outcome_records[0], "outcome") in (
+            "zerohop", "noop", "passthru", "warn",
+        )
+
     def test_range_test_app_real_world_payload(self, caplog):
         """Real-world RANGE_TEST_APP JSON published by a Meshtastic gateway.
 
@@ -515,7 +530,7 @@ class TestProcessMessageUnmockedJson:
            floodgate reads `from` for its log fields.
         """
         config = self._config(policy="whitelist")
-        payload = json.dumps(RANGE_TEST_APP_JSON).encode()
+        payload = _load_json_payload("range_test_app.json")
         # Gateway publishes on its own !sender topic
         with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
             result = process_message(
