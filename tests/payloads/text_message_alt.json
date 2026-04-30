@@ -1,0 +1,16 @@
+{
+  "channel": 6,
+  "from": 2852126730,
+  "hop_start": 7,
+  "hops_away": 0,
+  "id": 3378056676,
+  "payload": {
+    "text": "test broadcast"
+  },
+  "rssi": -79,
+  "sender": "!cc000008",
+  "snr": 6.25,
+  "timestamp": 1769297092,
+  "to": 4294967295,
+  "type": "text"
+}

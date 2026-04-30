@@ -1,0 +1,15 @@
+{
+  "channel": 0,
+  "from": 2852126729,
+  "hop_start": 7,
+  "hops_away": 7,
+  "id": 1278629692,
+  "payload": {
+    "relative_humidity": 22.4500007629395,
+    "temperature": 30.7999992370605
+  },
+  "sender": "!cc000007",
+  "timestamp": 1777585953,
+  "to": 4294967295,
+  "type": "telemetry"
+}
