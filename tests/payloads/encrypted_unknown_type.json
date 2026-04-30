@@ -1,0 +1,13 @@
+{
+  "channel": 0,
+  "from": 2852126725,
+  "hop_start": 7,
+  "hops_away": 0,
+  "id": 1910773556,
+  "rssi": -46,
+  "sender": "!cc000004",
+  "snr": 6,
+  "timestamp": 1777583700,
+  "to": 2852126999,
+  "type": ""
+}

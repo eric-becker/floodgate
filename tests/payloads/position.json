@@ -1,0 +1,20 @@
+{
+  "channel": 0,
+  "from": 2852126721,
+  "hops_away": 1,
+  "id": 84916017,
+  "payload": {
+    "altitude": 27,
+    "latitude_i": 388898060,
+    "longitude_i": -770090560,
+    "precision_bits": 13,
+    "time": 1777043795,
+    "timestamp": 1766263820
+  },
+  "rssi": -128,
+  "sender": "!cc000001",
+  "snr": -17,
+  "timestamp": 1777583570,
+  "to": 4294967295,
+  "type": "position"
+}

@@ -1,0 +1,18 @@
+{
+  "channel": 0,
+  "from": 2852126722,
+  "hops_away": 1,
+  "id": 192399766,
+  "payload": {
+    "air_util_tx": 1.101722240448,
+    "battery_level": 101,
+    "channel_utilization": 12.7849998474121,
+    "voltage": 4.27099990844727
+  },
+  "rssi": -120,
+  "sender": "!cc000001",
+  "snr": -7.75,
+  "timestamp": 1777583497,
+  "to": 4294967295,
+  "type": "telemetry"
+}
