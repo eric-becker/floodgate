@@ -21,3 +21,4 @@ data:
     stats_interval_s: 60
     log_level: "INFO"
     log_format: "text"
+    stats_log: true

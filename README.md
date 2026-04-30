@@ -235,7 +235,7 @@ Per-message outcomes are logged at **INFO** — no special flags required. Field
 
 **JSON mode** (`log_format: json` or `FLOODGATE_LOG_FORMAT=json`):
 ```json
-{"timestamp":"2026-04-01T12:00:01Z","level":"INFO","name":"floodgate.zerohop","message":"zerohop","event":"message","outcome":"zerohop","topic":"msh/US/2/e/LongFast/!a2e1a8c4","channel":"LongFast","encoding":"e","id":3827461829,"from":"!a2e1a8c4","to":"!ffffffff","hop_limit":3,"hop_start":3}
+{"timestamp":"2026-04-01T12:00:01Z","level":"INFO","name":"floodgate.zerohop","message":"zerohop","event":"message","outcome":"zerohop","topic":"msh/US/2/e/LongFast/!a2e1a8c4","channel":"LongFast","encoding":"e","id":3827461829,"from":"!a2e1a8c4","to":"!ffffffff","hop_limit":3,"hop_start":3,"relay":null,"via_mqtt":null}
 ```
 
 JSON output is optimized for Loki/Grafana: the `message` field is just the outcome tag, all data is in structured top-level fields. Example LogQL queries:
