@@ -12,6 +12,32 @@ from floodgate.zerohop import (
     zerohop_json,
 )
 
+# Real-world Meshtastic JSON sample payloads, captured from gateways publishing
+# to /json/ topics. Use as fixtures for tests that exercise common portnums.
+# Note: gateway-published JSON nests transport metadata (hop_limit, rx_rssi, etc.)
+# inside `payload`, not at the top level. zerohop_json currently only inspects
+# the top level — see test_range_test_app_real_world_payload.
+
+RANGE_TEST_APP_JSON = {
+    "channel": 0,
+    "from": 2640243444,
+    "id": 1455581347,
+    "payload": {
+        "decoded": {
+            "payload": "c2VxIDM2",
+            "portnum": "RANGE_TEST_APP",
+        },
+        "hop_limit": 3,
+        "rx_rssi": -108,
+        "rx_snr": -11.25,
+        "rx_time": 1714392055,
+        "want_ack": False,
+    },
+    "sender": "!9d5f3af4",
+    "to": 4294967295,
+    "type": "packet",
+}
+
 
 class TestFmtNode:
 
@@ -473,3 +499,33 @@ class TestProcessMessageUnmockedJson:
         assert json.loads(result)["hop_limit"] == 0
         rec = caplog.records[-1]
         assert getattr(rec, "outcome") == "zerohop"
+
+    def test_range_test_app_real_world_payload(self, caplog):
+        """Real-world RANGE_TEST_APP JSON published by a Meshtastic gateway.
+
+        Two behaviors documented here:
+
+        1. Gateway-published JSON nests hop_limit inside `payload`, not at
+           the top level. zerohop_json only inspects the top level, so this
+           packet is treated as already zero-hopped (noop) and passes
+           through unchanged. Tracking issue: #29 (portnum-based blacklist).
+
+        2. The JSON has both `from` (originating node, decimal int) and
+           `sender` (publishing gateway, !hex string) — they may differ.
+           floodgate reads `from` for its log fields.
+        """
+        config = self._config(policy="whitelist")
+        payload = json.dumps(RANGE_TEST_APP_JSON).encode()
+        # Gateway publishes on its own !sender topic
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message(
+                "msh/US/2/json/LongFast/!9d5f3af4", payload, config,
+            )
+        assert result is None
+        rec = [r for r in caplog.records if getattr(r, "outcome", None) == "noop"]
+        assert len(rec) == 1
+        assert getattr(rec[0], "id") == 1455581347
+        # `from` is sourced from JSON's `from` field (originating node), not `sender`
+        assert getattr(rec[0], "from") == "!9d5eeaf4"
+        assert getattr(rec[0], "to") == "!ffffffff"
+        assert getattr(rec[0], "hop_limit") == 0
