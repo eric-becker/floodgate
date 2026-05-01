@@ -1,0 +1,36 @@
+{
+  "channel": 1,
+  "from": 2852126727,
+  "hop_start": 4,
+  "hops_away": 1,
+  "id": 1222886113,
+  "payload": {
+    "route": [
+      "Unknown",
+      "Unknown",
+      "Test Relay A",
+      "Unknown"
+    ],
+    "route_back": [
+      "Unknown",
+      "Test Relay B",
+      "Test Base C",
+      "Unknown"
+    ],
+    "snr_back": [
+      -14,
+      5.75
+    ],
+    "snr_towards": [
+      5.75,
+      -13.5,
+      -16.25
+    ]
+  },
+  "rssi": -35,
+  "sender": "!cc000006",
+  "snr": 5.75,
+  "timestamp": 1777527590,
+  "to": 2852126728,
+  "type": "traceroute"
+}

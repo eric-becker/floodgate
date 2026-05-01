@@ -10,6 +10,15 @@ Test tiers:
 In CI, tiers are run as separate jobs so failures are clearly attributed.
 """
 
+import sys
+from pathlib import Path
+
+# Make the generated meshtastic protobuf bindings importable when present.
+# Tests that need them call pytest.importorskip("meshtastic") and skip
+# gracefully when the bindings aren't generated (e.g. CI's mock-only path).
+_generated = Path(__file__).resolve().parent.parent / "generated"
+if _generated.is_dir() and str(_generated) not in sys.path:
+    sys.path.insert(0, str(_generated))
 
 
 def pytest_configure(config):

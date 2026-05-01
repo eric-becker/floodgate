@@ -31,7 +31,11 @@ pytest tests/ --ignore=tests/test_container_smoke.py -q   # no Docker required
 pytest tests/ -q   # full suite including container smoke test (requires Docker)
 ```
 
-Tests mock protobuf imports — no protobufs needed to run the unit test suite.
+Tests mock protobuf imports for the routing-logic suite, so it runs without
+protobufs (handy for fast iteration). Tests under
+`tests/payloads/protobuf/` exercise `zerohop_protobuf` against real binary
+fixtures and require the generated stubs — they skip automatically when
+the stubs aren't present, and CI generates them before running tests.
 
 ## Running
 

@@ -20,15 +20,20 @@ Every PR and push to `main` runs four jobs in sequence:
 | Job | What it checks |
 |-----|----------------|
 | **lint** | `ruff` style and import checks |
-| **unit tests** | Pure Python tests across Python 3.11/3.12/3.13 — no external services needed. Protobuf imports are mocked so no protobufs required. |
+| **unit tests** | Pure Python tests across Python 3.11/3.12/3.13 — no external services needed. CI generates the Meshtastic protobuf stubs before running so the unmocked protobuf payload tests in `tests/payloads/protobuf/` are exercised. Mocked tests in the rest of the suite still run without protobufs (handy for fast local iteration). |
 | **container smoke** | Builds the Docker image, starts the container, and verifies `/health` returns `200 OK`. Catches Dockerfile bugs and runtime import errors that unit tests cannot. |
 | **manifest validation** | Validates `k8s/*.yaml` against the Kubernetes schema with `kubeconform`. |
 
 ### Running locally
 
 ```bash
-# Unit tests (fast, no Docker needed)
+# Unit tests (fast, no Docker needed). Protobuf-dependent tests skip
+# automatically if you haven't generated stubs yet.
 pytest tests/ --ignore=tests/test_container_smoke.py -q
+
+# Generate protobuf stubs once for full coverage of /e/ payload tests
+./scripts/download_protobufs.sh
+./scripts/generate_protos.sh
 
 # With coverage
 pytest tests/ --ignore=tests/test_container_smoke.py --cov=src/floodgate --cov-report=term-missing

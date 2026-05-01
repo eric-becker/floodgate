@@ -1,0 +1,23 @@
+{
+  "channel": 0,
+  "from": 2852126726,
+  "hop_start": 5,
+  "hops_away": 0,
+  "id": 472577637,
+  "payload": {
+    "last_sent_by_id": 2852126726,
+    "neighbors": [
+      {
+        "node_id": 2852126800,
+        "snr": -9
+      }
+    ],
+    "neighbors_count": 1,
+    "node_broadcast_interval_secs": 90,
+    "node_id": 2852126726
+  },
+  "sender": "!cc000005",
+  "timestamp": 1777584063,
+  "to": 4294967295,
+  "type": "neighborinfo"
+}

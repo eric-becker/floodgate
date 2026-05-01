@@ -1,0 +1,20 @@
+{
+  "channel": 0,
+  "from": 2852126723,
+  "hop_start": 7,
+  "hops_away": 1,
+  "id": 59837112,
+  "payload": {
+    "hardware": 48,
+    "id": "!aa000003",
+    "longname": "Test Node 3",
+    "role": 0,
+    "shortname": "TST3"
+  },
+  "rssi": -27,
+  "sender": "!cc000002",
+  "snr": 5.5,
+  "timestamp": 1777583572,
+  "to": 4294967295,
+  "type": "nodeinfo"
+}

@@ -47,6 +47,12 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
 
+      - name: Download Meshtastic protobufs
+        run: ./scripts/download_protobufs.sh
+
+      - name: Generate Python protobuf stubs
+        run: ./scripts/generate_protos.sh
+
       - name: Run unit tests with coverage
         run: |
           pytest tests/ -q \

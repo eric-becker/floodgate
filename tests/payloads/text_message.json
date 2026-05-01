@@ -1,0 +1,16 @@
+{
+  "channel": 0,
+  "from": 2852126724,
+  "hop_start": 7,
+  "hops_away": 7,
+  "id": 2796478547,
+  "payload": {
+    "text": "hello mesh"
+  },
+  "rssi": -112,
+  "sender": "!cc000003",
+  "snr": -16.75,
+  "timestamp": 1777327824,
+  "to": 4294967295,
+  "type": "text"
+}
