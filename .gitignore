@@ -33,3 +33,6 @@ protobufs/*
 
 # Claude Code local settings
 .claude/
+
+# Claude Code planning artifacts (created by superpowers writing-plans skill)
+docs/superpowers/
