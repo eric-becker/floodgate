@@ -541,14 +541,14 @@ class TestProcessMessageUnmockedJson:
         # Gateway publishes on its own !sender topic
         with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
             result = process_message(
-                "msh/US/2/json/LongFast/!9d5f3af4", payload, config,
+                "msh/US/2/json/LongFast/!cc00000a", payload, config,
             )
         assert result is None
         rec = [r for r in caplog.records if getattr(r, "outcome", None) == "noop"]
         assert len(rec) == 1
         assert getattr(rec[0], "id") == 1455581347
         # `from` is sourced from JSON's `from` field (originating node), not `sender`
-        assert getattr(rec[0], "from") == "!9d5eeaf4"
+        assert getattr(rec[0], "from") == "!aa00000a"
         assert getattr(rec[0], "to") == "!ffffffff"
         assert getattr(rec[0], "hop_limit") == 0
 
