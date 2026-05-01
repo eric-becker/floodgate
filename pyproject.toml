@@ -34,9 +34,15 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Keep ruff's incremental cache out of the working tree so the repo
+# stays clean. Path is per-machine; CI builds get a fresh cache anyway.
+cache-dir = "/tmp/ruff_cache_floodgate"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Same rationale as ruff cache-dir above. /tmp survives a single
+# session but gets wiped on reboot, which is fine for dev caches.
+cache_dir = "/tmp/pytest_cache_floodgate"
