@@ -85,3 +85,15 @@ When making code changes, **always update in the same PR**:
 - `CONTRIBUTING.md` — if CI jobs, test tiers, or branch strategy changes
 
 Do not open a PR until README and tests reflect the code changes being merged.
+
+## Local-only paths (never commit)
+
+These paths exist in working trees but are gitignored. Never stage them:
+
+- `.claude/` — local Claude Code settings
+- `docs/superpowers/` — planning artifacts written by Claude's superpowers skills
+- `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `coverage*` — Python build/test artefacts
+- `generated/` — Python protobuf stubs (built by `scripts/generate_protos.sh`)
+- `protobufs/meshtastic/` — upstream Meshtastic protobufs (downloaded by `scripts/download_protobufs.sh`); only `protobufs/.gitkeep` and `protobufs/README.md` are tracked
+
+Before starting work on a branch, `git fetch origin && git rebase origin/main` to pick up any landed changes to `.gitignore` or shared workflows.
