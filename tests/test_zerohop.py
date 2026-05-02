@@ -749,6 +749,54 @@ class TestProcessMessageUnmockedProtobuf:
             "zerohop", "noop", "passthru", "warn", "dropped",
         )
 
+    def test_synthetic_envelope_zerohop_round_trip(self, caplog):
+        """A real encrypted /e/ ServiceEnvelope built with hop_limit=3 flows
+        through process_message, returns ACTION_MODIFY with hop_limit zeroed,
+        and the inner Data still decrypts and parses cleanly."""
+        from meshtastic import mesh_pb2, mqtt_pb2, portnums_pb2
+
+        from floodgate.decrypt import decrypt as floodgate_decrypt
+        from tests.test_portnum import _build_encrypted_envelope
+
+        packet_id = 0xA1B2C3D4
+        from_node = 0x12345678
+        envelope_bytes = _build_encrypted_envelope(
+            mesh_pb2, mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+            payload_bytes=b"hello",
+            packet_id=packet_id,
+            from_node=from_node,
+            channel_name="LongFast",
+            hop_limit=3,
+        )
+
+        config = _make_config(zerohop_channels=["LongFast"])
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message(
+                "msh/US/2/e/LongFast/!00000000", envelope_bytes, config,
+            )
+
+        assert result.action == ACTION_MODIFY
+        assert result.payload is not None
+
+        modified = mqtt_pb2.ServiceEnvelope()
+        modified.ParseFromString(result.payload)
+        assert modified.packet.hop_limit == 0
+        assert modified.packet.id == packet_id
+        assert modified.channel_id == "LongFast"
+
+        plaintext = floodgate_decrypt(
+            modified.packet.encrypted, packet_id=packet_id, from_node=from_node,
+        )
+        inner = mesh_pb2.Data()
+        inner.ParseFromString(plaintext)
+        assert inner.portnum == portnums_pb2.PortNum.TEXT_MESSAGE_APP
+        assert inner.payload == b"hello"
+
+        outcome_records = [r for r in caplog.records if hasattr(r, "outcome")]
+        assert len(outcome_records) == 1
+        assert getattr(outcome_records[0], "outcome") == "zerohop"
+
 
 # ---------------------------------------------------------------------------
 # AntifloodStats — counter mechanics
