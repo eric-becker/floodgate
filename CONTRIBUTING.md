@@ -22,6 +22,7 @@ Every PR and push to `main` runs four jobs in sequence:
 | **lint** | `ruff` style and import checks |
 | **unit tests** | Pure Python tests across Python 3.11/3.12/3.13 — no external services needed. CI generates the Meshtastic protobuf stubs before running so the unmocked protobuf payload tests in `tests/payloads/protobuf/` are exercised. Mocked tests in the rest of the suite still run without protobufs (handy for fast local iteration). |
 | **container smoke** | Builds the Docker image, starts the container, and verifies `/health` returns `200 OK`. Catches Dockerfile bugs and runtime import errors that unit tests cannot. |
+| **integration** | Brings up `docker-compose.test.yaml` (EMQX + floodgate + meshtasticd + test-driver) and runs `drop` / `zerohop` / `passthru` / `noop` / `custom-key passthru` / meshtasticd round-trip end-to-end. See "Integration testing" below. |
 | **manifest validation** | Validates `k8s/*.yaml` against the Kubernetes schema with `kubeconform`. |
 
 ### Running locally
@@ -49,6 +50,29 @@ pytest tests/test_container_smoke.py -m smoke -v
 # Lint
 ruff check src/ tests/
 ```
+
+### Integration testing
+
+The integration harness (`scripts/run-integration.sh`) brings up a full Docker Compose stack — EMQX + floodgate + an ExHook auto-registration container + meshtasticd in SimRadio mode + a Python test-driver — on an isolated bridge network and runs end-to-end checks for `drop`, `zerohop`, `passthru`, `noop`, `custom-key channel passthru`, and a meshtasticd round-trip.
+
+Each case verifies BOTH what the subscriber received (delivered MQTT bytes) AND floodgate's `/health` stats — a behavior change with no stat increment, or a stat increment with no delivery effect, both fail the case. One PASS or FAIL line is printed per case.
+
+Requirements: `docker` and `bash`. The `pytest` suite never runs the harness — it's opt-in via the script.
+
+```bash
+# One-shot verification — brings the stack up, runs cases, tears down, exits 0/non-zero.
+./scripts/run-integration.sh
+
+# Ad-hoc poking — leave the stack running after the cases finish.
+./scripts/run-integration.sh --keep
+#   floodgate /health: http://localhost:18089/health
+#   EMQX dashboard:    http://localhost:18083  (admin / public)
+
+# Tear the stack down (and volumes/network) without running cases.
+./scripts/run-integration.sh --teardown
+```
+
+CI runs the same script in the `integration` job after the `smoke` job passes. A failed case dumps service logs into the workflow output before tearing down.
 
 ## Commit style
 
