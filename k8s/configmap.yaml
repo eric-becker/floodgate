@@ -4,9 +4,8 @@ metadata:
   name: floodgate-config
 data:
   config.yaml: |
-    channel_policy: "blacklist"
-    channel_whitelist: []
-    channel_blacklist:
+    zerohop_enabled: true
+    zerohop_channels:
       - "LongTurbo"
       - "LongFast"
       - "LongModerate"
@@ -15,6 +14,9 @@ data:
       - "ShortFast"
       - "ShortSlow"
       - "ShortTurbo"
+    drop_enabled: false
+    drop_channels: "zerohop_channels"
+    drop_portnums: []
     grpc_port: 9000
     health_port: 8080
     topic_filter: "msh/#"

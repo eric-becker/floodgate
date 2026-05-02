@@ -1,11 +1,11 @@
 # floodgate configuration
 
-# Channel policy: "blacklist" (zero-hop only listed channels) or
-#                 "whitelist" (zero-hop all except listed channels)
-channel_policy: "blacklist"
+# Zerohop: modify hop_limit to 0 and let EMQX deliver the modified packet.
+# This is the core anti-flood behavior — without it floodgate is a no-op.
+zerohop_enabled: true
 
-# Channels to zero-hop (blacklist mode). Standard Meshtastic public presets.
-channel_blacklist:
+# Channels to zero-hop. Standard Meshtastic public presets.
+zerohop_channels:
   - "LongTurbo"
   - "LongFast"
   - "LongModerate"
@@ -15,8 +15,23 @@ channel_blacklist:
   - "ShortSlow"
   - "ShortTurbo"
 
-# Channels exempt from zero-hop (whitelist mode only).
-channel_whitelist: []
+# Drop: deny the publish entirely so EMQX never delivers it to subscribers.
+# Disabled by default. Drop is checked BEFORE zerohop — a dropped packet
+# never reaches the zerohop logic.
+drop_enabled: false
+
+# Channels on which the drop filter is active. Three forms accepted:
+#   "zerohop_channels" — reuse the same list as zerohop_channels (default)
+#   ["LongFast", ...]  — explicit list of channel names
+#   null               — apply to ALL channels (no scoping)
+drop_channels: "zerohop_channels"
+
+# Portnums to drop, by Meshtastic proto enum name. See:
+# https://buf.build/meshtastic/protobufs/docs/main:meshtastic#meshtastic.PortNum
+# Note: drop only acts on packets whose portnum floodgate can read. For
+# protobuf (/e/) topics that means channels using the default encryption key
+# (AQ==); custom-keyed channels are always delivered.
+drop_portnums: []
 
 grpc_port: 9000
 health_port: 8080
@@ -30,6 +45,6 @@ log_level: "INFO"
 # Override with FLOODGATE_LOG_FORMAT env var.
 log_format: "text"
 
-# Log periodic stats summary (zerohop/passthru/noop counts).
+# Log periodic stats summary (zerohop/passthru/noop/dropped counts).
 # Set false to disable stats log lines.
 stats_log: true

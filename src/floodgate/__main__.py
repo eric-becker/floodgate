@@ -28,7 +28,8 @@ def main():
         action="store_true",
         help=(
             "Enable DEBUG logging — very verbose (decode steps, byte counts, gRPC calls). "
-            "INFO already shows per-message outcomes ([ZEROHOP]/[PASSTHRU]/[NOOP]). "
+            "INFO already shows per-message outcomes "
+            "([ZEROHOP]/[PASSTHRU]/[NOOP]/[DROPPED]). "
             "Equivalent to log_level: DEBUG in config.yaml."
         ),
     )

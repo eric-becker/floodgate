@@ -29,11 +29,14 @@ Each message produces one outcome:
 
 | Outcome | Condition |
 |---------|-----------|
-| `zerohop` | Channel matched policy, `hop_limit > 0` — zeroed |
-| `noop` | Channel matched policy, already `hop_limit=0` |
-| `passthru` | Channel exempt by policy — unchanged |
-| `warn` | Payload parse failure — unchanged |
+| `dropped` | Matched the drop filter — denied entirely; EMQX never delivers it |
+| `zerohop` | Channel in `zerohop_channels`, `hop_limit > 0` — zeroed and delivered |
+| `noop` | Channel in `zerohop_channels`, already `hop_limit=0` — delivered unchanged |
+| `passthru` | Channel not in `zerohop_channels` (or zerohop disabled) — delivered unchanged |
+| `warn` | Payload parse failure — delivered unchanged |
 | `skipped` | Non-packet topic (map report, stat, etc.) — silently ignored |
+
+The drop filter runs **before** zerohop. A packet matching both is reported as `dropped`.
 
 ## Deployment
 
@@ -121,9 +124,11 @@ See [config.yaml](config.yaml) for a fully annotated example.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `channel_policy` | `blacklist` | See policy docs below. |
-| `channel_blacklist` | 8 standard presets | Channels to zero-hop (blacklist mode). |
-| `channel_whitelist` | `[]` | Channels exempt from zero-hop (whitelist mode). |
+| `zerohop_enabled` | `true` | Master switch for the zero-hop modifier. |
+| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` zeroed. |
+| `drop_enabled` | `false` | Master switch for the drop filter (deny entirely). |
+| `drop_channels` | `"zerohop_channels"` | Channels on which the drop filter runs. List of channels, the literal string `"zerohop_channels"` to inherit, or `null` for all channels. |
+| `drop_portnums` | `[]` | Meshtastic portnums (proto enum names like `RANGE_TEST_APP`) to drop. |
 | `topic_filter` | `msh/#` | MQTT topic pattern to apply. |
 | `grpc_port` | `9000` | gRPC listen port. |
 | `health_port` | `8080` | HTTP health check port. `GET /health` returns `{"status":"ok","stats":{...}}`. |
@@ -132,14 +137,14 @@ See [config.yaml](config.yaml) for a fully annotated example.
 | `log_level` | `INFO` | `INFO` shows per-message outcomes. `DEBUG` adds verbose internals. |
 | `log_format` | `text` | `text` for human-readable output, `json` for Loki/Grafana structured logging. Can also be set via `FLOODGATE_LOG_FORMAT` env var. |
 
-### Channel policy
+> **Migrating from a pre-rename config?** The keys `channel_policy`, `channel_blacklist`, and `channel_whitelist` were removed. floodgate now refuses to start if they appear in `config.yaml` and prints the new equivalents. Update your config and restart.
 
-**`blacklist` (default)** — zero-hop only the channels named in `channel_blacklist`. All other channels are forwarded unchanged. This is the right choice for most deployments: it targets the standard Meshtastic public presets that flood radio networks, while leaving private or custom channels untouched.
+### Zerohop
 
-The default `channel_blacklist` contains the eight standard Meshtastic public channel presets:
+The default zerohop list contains the eight standard Meshtastic public channel presets:
 ```yaml
-channel_policy: "blacklist"
-channel_blacklist:
+zerohop_enabled: true
+zerohop_channels:
   - "LongTurbo"
   - "LongFast"
   - "LongModerate"
@@ -150,20 +155,29 @@ channel_blacklist:
   - "ShortTurbo"
 ```
 
-**`whitelist`** — zero-hop ALL channels *except* those named in `channel_whitelist`. Use this for blanket enforcement when you want every channel zeroed with only specific exemptions.
+To zero-hop every channel a gateway forwards (maximum enforcement), pass them all in `zerohop_channels`. To leave a private channel rebroadcasting normally, omit it from the list. To turn the modifier off entirely (e.g. during a maintenance window), set `zerohop_enabled: false`.
 
-To zero-hop every packet with no exceptions — maximum enforcement — use an empty whitelist:
+### Drop
+
+The drop filter denies a publish entirely — EMQX does not deliver it to subscribers, so it doesn't appear in MQTT consumers, dashboards, or chat logs. Drop runs *before* zerohop; a dropped packet never reaches the zerohop check.
+
+The motivating use case is portnum traffic that floods the standard public channels and isn't useful in MQTT downstream — for example, `RANGE_TEST_APP`:
 ```yaml
-channel_policy: "whitelist"
-channel_whitelist: []
+drop_enabled: true
+drop_channels: "zerohop_channels"   # same scope as zerohop
+drop_portnums:
+  - "RANGE_TEST_APP"
 ```
 
-To exempt specific channels (e.g. a private channel your gateways should rebroadcast normally):
-```yaml
-channel_policy: "whitelist"
-channel_whitelist:
-  - "MyPrivateChannel"
-```
+`drop_channels` accepts:
+
+- the literal string `"zerohop_channels"` to reuse the same list as `zerohop_channels` (default — keeps drop scope aligned with zerohop scope without duplication),
+- an explicit list of channel names, e.g. `["LongFast", "MediumFast"]`,
+- `null` (or an empty list) to apply on all channels.
+
+> **Encryption constraint.** `drop_portnums` only acts on packets whose portnum floodgate can read. For protobuf (`/e/`) topics that means channels using the default Meshtastic encryption key (`AQ==`); custom-keyed channels are unreadable and therefore always delivered. JSON (`/json/`) topics expose the portnum directly and have no such limitation.
+
+> **Publisher behavior.** When floodgate denies a publish, EMQX still sends a normal PUBACK to the publisher — there's no protocol-level signal back to the gateway that its message was filtered. This is a property of the EMQX ExHook deny mechanism, not floodgate. Operators monitoring publisher-side success counters won't see drops; the floodgate `dropped` counter and per-message log lines are the source of truth.
 
 ### ExHook failure policy
 
@@ -214,9 +228,10 @@ curl -s http://localhost:8080/health | jq .
     "zerohop": 142,
     "passthru": 3,
     "noop": 0,
+    "dropped": 4,
     "skipped": 1050,
     "errors": 0,
-    "total": 1195
+    "total": 1199
   }
 }
 ```
@@ -229,8 +244,9 @@ Per-message outcomes are logged at **INFO** — no special flags required. Field
 ```
 2026-04-01 12:00:01 INFO     [floodgate.zerohop] [ZEROHOP] topic=msh/US/2/e/LongFast/!a2e1a8c4 channel=LongFast encoding=e id=3827461829 from=!a2e1a8c4 to=!ffffffff hop_limit=3 hop_start=3
 2026-04-01 12:00:02 INFO     [floodgate.zerohop] [NOOP] topic=msh/US/2/e/LongFast/!b3c4d5e6 channel=LongFast encoding=e id=2019283746 from=!b3c4d5e6 to=!ffffffff hop_limit=0 hop_start=3
+2026-04-01 12:00:08 INFO     [floodgate.zerohop] [DROPPED] topic=msh/US/2/e/LongFast/!c1c2c3c4 channel=LongFast encoding=e portnum=RANGE_TEST_APP id=694258842 from=!c1c2c3c4 to=!ffffffff
 2026-04-01 12:00:15 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4 channel=MyPrivate encoding=e id=1234567890 from=!a2e1a8c4 to=!ffffffff
-2026-04-01 12:01:01 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=1 noop=0 skipped=1050 errors=0 total=1193
+2026-04-01 12:01:01 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=1 noop=0 dropped=4 skipped=1050 errors=0 total=1197
 ```
 
 **JSON mode** (`log_format: json` or `FLOODGATE_LOG_FORMAT=json`):
@@ -298,7 +314,7 @@ pytest tests/ -q   # full suite including container smoke test (requires Docker)
 ```
 2026-04-01 14:23:47 INFO     [floodgate.zerohop] [ZEROHOP] topic=msh/US/2/e/LongFast/!a2e1a8c4 channel=LongFast encoding=e id=3827461829 from=!a2e1a8c4 to=!ffffffff hop_limit=3 hop_start=3
 2026-04-01 14:23:48 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4 channel=MyPrivate encoding=e id=1234567890 from=!a2e1a8c4 to=!ffffffff
-2026-04-01 14:24:47 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=3 noop=0 skipped=1050 errors=0 total=1195
+2026-04-01 14:24:47 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=3 noop=0 dropped=2 skipped=1050 errors=0 total=1197
 ```
 
 ## Legal
