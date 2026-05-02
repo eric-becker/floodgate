@@ -302,6 +302,35 @@ def case_passthru(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
+def case_noop(pub: Publisher, sub: Subscriber) -> Outcome:
+    """Already hop_limit=0 on a zerohop channel — delivered unchanged, counted as noop."""
+    name = "noop"
+    pre = health_stats()
+    pkt_id = 0xA4A4A4A4
+    body = build_envelope(
+        channel   = "LongFast",
+        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload   = b"already-zero",
+        packet_id = pkt_id,
+        from_node = 0xDEADBEEF,
+        hop_limit = 0,
+        hop_start = 3,
+    )
+    pub.publish(topic_for("LongFast"), body)
+    time.sleep(SETTLE_SECONDS)
+
+    delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not delivered:
+        return Outcome(name, False, "packet was not delivered to subscriber")
+    if delivered[-1].payload != body:
+        return Outcome(name, False, "noop delivered payload should be byte-identical")
+
+    post = health_stats()
+    if post.get("noop", 0) - pre.get("noop", 0) < 1:
+        return Outcome(name, False, "stats.noop did not increment")
+    return Outcome(name)
+
+
 def run_all() -> int:
     sub = Subscriber(EMQX_HOST, EMQX_PORT)
     sub.start()
@@ -311,6 +340,7 @@ def run_all() -> int:
             case_zerohop(pub, sub),
             case_drop(pub, sub),
             case_passthru(pub, sub),
+            case_noop(pub, sub),
         ]
         for o in outcomes:
             print(o.line(), flush=True)
