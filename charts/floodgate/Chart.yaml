@@ -1,0 +1,17 @@
+apiVersion: v2
+name: floodgate
+description: MQTT anti-flood service for Meshtastic — zero-hop modifier and portnum drop filter for EMQX via the ExHook gRPC interface.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/eric-becker/floodgate
+sources:
+  - https://github.com/eric-becker/floodgate
+keywords:
+  - meshtastic
+  - mqtt
+  - emqx
+  - exhook
+maintainers:
+  - name: Eric Becker
+    url: https://github.com/eric-becker

@@ -1,0 +1,29 @@
+Floodgate is installed.
+
+  Release:   {{ .Release.Name }}
+  Namespace: {{ .Release.Namespace }}
+  Image:     {{ include "floodgate.image" . }}
+
+The gRPC ExHook endpoint is available cluster-internally at:
+
+  http://{{ include "floodgate.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.config.grpc_port }}
+
+Register it on your EMQX broker:
+
+  curl -u admin:public -X POST http://<emqx-host>:18083/api/v5/exhooks \
+    -H 'Content-Type: application/json' \
+    -d '{
+      "name": "floodgate",
+      "url":  "http://{{ include "floodgate.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.config.grpc_port }}",
+      "enable": true
+    }'
+
+Tail floodgate logs:
+
+  kubectl logs -n {{ .Release.Namespace }} deploy/{{ include "floodgate.fullname" . }} -f
+
+Inspect /health (the Service exposes only gRPC, so port-forward the Pod):
+
+  POD=$(kubectl get pod -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "floodgate.name" . }} -o name | head -1)
+  kubectl port-forward -n {{ .Release.Namespace }} $POD {{ .Values.config.health_port }}:{{ .Values.config.health_port }}
+  curl http://localhost:{{ .Values.config.health_port }}/health
