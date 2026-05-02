@@ -23,19 +23,22 @@ done
 sleep 3
 
 echo "meshtasticd-init: configuring MQTT module"
-meshtastic --host "${HOST}" --port "${PORT}" \
-    --set moduleConfig.mqtt.enabled            true \
-    --set moduleConfig.mqtt.address            "${EMQX_ADDR}" \
-    --set moduleConfig.mqtt.root               msh \
-    --set moduleConfig.mqtt.tls_enabled        false \
-    --set moduleConfig.mqtt.encryption_enabled true \
-    --set moduleConfig.mqtt.json_enabled       false
+# The meshtastic CLI uses flat dotted preference paths (mqtt.enabled,
+# mqtt.address, ...) — not the protobuf-nested form (moduleConfig.mqtt.*).
+# --port means *serial* port; for TCP we pass host:port via --host.
+meshtastic --host "${HOST}:${PORT}" \
+    --set mqtt.enabled            true \
+    --set mqtt.address            "${EMQX_ADDR}" \
+    --set mqtt.root               msh \
+    --set mqtt.tls_enabled        false \
+    --set mqtt.encryption_enabled true \
+    --set mqtt.json_enabled       false
 
 # Let the firmware reconnect to the broker with the new settings
 sleep 5
 
 echo "meshtasticd-init: sending probe text message"
-meshtastic --host "${HOST}" --port "${PORT}" \
+meshtastic --host "${HOST}:${PORT}" \
     --sendtext "floodgate-roundtrip-probe"
 
 echo "meshtasticd-init: done"

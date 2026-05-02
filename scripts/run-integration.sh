@@ -96,5 +96,13 @@ if [ "$mode" = "run-and-keep" ]; then
 fi
 
 trap - EXIT
+
+if [ $rc -ne 0 ]; then
+    # Dump service logs BEFORE teardown on the explicit-failure path. Without
+    # this, the workflow's `if: failure()` log-dump step fires after teardown
+    # finishes — by then all containers are gone and nothing remains to log.
+    echo "==> Run failed — dumping service logs before teardown"
+    docker compose -f "$COMPOSE_FILE" logs --no-color --tail=400 || true
+fi
 teardown
 exit $rc
