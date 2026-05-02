@@ -242,6 +242,33 @@ def case_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
+def case_drop(pub: Publisher, sub: Subscriber) -> Outcome:
+    name = "drop"
+    pre = health_stats()
+    pkt_id = 0xA2A2A2A2
+    body = build_envelope(
+        channel   = "LongFast",
+        portnum   = portnums_pb2.PortNum.RANGE_TEST_APP,
+        payload   = b"flood",
+        packet_id = pkt_id,
+        from_node = 0xDEADBEEF,
+        hop_limit = 3,
+    )
+    pub.publish(topic_for("LongFast"), body)
+    time.sleep(SETTLE_SECONDS)
+
+    delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if delivered:
+        return Outcome(name, False,
+                       f"packet was delivered to subscriber ({len(delivered)} times); "
+                       "drop should have denied it")
+
+    post = health_stats()
+    if post.get("dropped", 0) - pre.get("dropped", 0) < 1:
+        return Outcome(name, False, "stats.dropped did not increment")
+    return Outcome(name)
+
+
 def run_all() -> int:
     sub = Subscriber(EMQX_HOST, EMQX_PORT)
     sub.start()
@@ -249,6 +276,7 @@ def run_all() -> int:
     try:
         outcomes: list[Outcome] = [
             case_zerohop(pub, sub),
+            case_drop(pub, sub),
         ]
         for o in outcomes:
             print(o.line(), flush=True)
