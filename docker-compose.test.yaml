@@ -42,12 +42,15 @@ services:
       start_period: 5s
 
   meshtasticd:
-    image: ghcr.io/meshtastic/meshtasticd:latest
+    image: meshtastic/meshtasticd:latest
     container_name: floodgate-test-meshtasticd
     networks: [floodgate-test-net]
-    # Append "-s" to the upstream entrypoint to run in SimRadio mode (no LoRa
-    # hardware needed). Matches the firmware project's own CI pattern.
-    command: ["-s"]
+    # The upstream image's default CMD is sh-wrapped (`sh -cx 'meshtasticd
+    # --fsdir=...'`), so we override entrypoint + command together to inject
+    # `-s` (SimRadio mode — no LoRa hardware). Matches the firmware project's
+    # own CI pattern (firmware/.github/workflows/test_native.yml).
+    entrypoint: ["meshtasticd"]
+    command: ["-s", "--fsdir=/var/lib/meshtasticd"]
     depends_on:
       emqx:
         condition: service_healthy
