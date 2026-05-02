@@ -1,0 +1,23 @@
+zerohop_enabled: true
+zerohop_channels:
+  - "LongTurbo"
+  - "LongFast"
+  - "LongModerate"
+  - "MediumFast"
+  - "MediumSlow"
+  - "ShortFast"
+  - "ShortSlow"
+  - "ShortTurbo"
+
+drop_enabled: true
+drop_channels: "zerohop_channels"
+drop_portnums:
+  - "RANGE_TEST_APP"
+
+grpc_port: 9000
+health_port: 8080
+topic_filter: "msh/#"
+stats_interval_s: 10
+log_level: "INFO"
+log_format: "text"
+stats_log: true
