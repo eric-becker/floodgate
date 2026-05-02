@@ -1,0 +1,78 @@
+# Integration test stack. Brought up by scripts/run-integration.sh.
+# All inter-service traffic stays on the floodgate-test-net bridge.
+# Only floodgate /health (8080->18089) and EMQX REST (18083) are exposed
+# to the host so the runner can poll readiness — MQTT 1883 and gRPC 9000
+# are container-internal only.
+
+services:
+  emqx:
+    image: emqx/emqx:6.1.1
+    container_name: floodgate-test-emqx
+    networks: [floodgate-test-net]
+    ports:
+      - "18083:18083"
+    environment:
+      EMQX_NAME: "emqx-test"
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: "public"
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 10s
+
+  floodgate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: floodgate-test:ci
+    container_name: floodgate-test-floodgate
+    networks: [floodgate-test-net]
+    ports:
+      - "18089:8080"
+    environment:
+      FLOODGATE_CONFIG: /app/config.yaml
+    volumes:
+      - ./tests/integration/config.yaml:/app/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  exhook-init:
+    build:
+      context: tests/integration/exhook-init
+    container_name: floodgate-test-exhook-init
+    networks: [floodgate-test-net]
+    depends_on:
+      emqx:
+        condition: service_healthy
+      floodgate:
+        condition: service_healthy
+    restart: "no"
+
+  test-driver:
+    build:
+      context: tests/integration/test-driver
+    image: floodgate-test-driver:ci
+    container_name: floodgate-test-driver
+    networks: [floodgate-test-net]
+    depends_on:
+      emqx:
+        condition: service_healthy
+      floodgate:
+        condition: service_healthy
+      exhook-init:
+        condition: service_completed_successfully
+    profiles: ["driver"]
+    environment:
+      EMQX_HOST: "emqx"
+      EMQX_PORT: "1883"
+      FLOODGATE_HEALTH_URL: "http://floodgate:8080/health"
+
+networks:
+  floodgate-test-net:
+    name: floodgate-test-net
+    driver: bridge
