@@ -28,10 +28,8 @@ Every PR and push to `main` runs five jobs in sequence:
 ### Running locally
 
 ```bash
-# Source the project .env once per shell to pick up dev-convenience vars
-# (currently just PYTHONDONTWRITEBYTECODE=1 to keep __pycache__ out of the
-# working tree). direnv users can skip this — direnv loads it automatically.
-set -a; . ./.env; set +a
+# Optional: keep __pycache__ out of the working tree.
+export PYTHONDONTWRITEBYTECODE=1
 
 # Unit tests (fast, no Docker needed). Protobuf-dependent tests skip
 # automatically if you haven't generated stubs yet.
