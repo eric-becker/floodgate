@@ -175,6 +175,30 @@ def health_stats() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Envelope inspection helpers (used by every test case to read the delivered
+# bytes back out of the subscriber's capture buffer).
+# ---------------------------------------------------------------------------
+
+def _parse_hop_limit(payload: bytes) -> int | None:
+    """Return MeshPacket.hop_limit from a serialized ServiceEnvelope, or None."""
+    try:
+        env = mqtt_pb2.ServiceEnvelope()
+        env.ParseFromString(payload)
+        return env.packet.hop_limit if env.HasField("packet") else None
+    except Exception:
+        return None
+
+
+def _packet_id_of(payload: bytes) -> int | None:
+    try:
+        env = mqtt_pb2.ServiceEnvelope()
+        env.ParseFromString(payload)
+        return env.packet.id if env.HasField("packet") else None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Test-case orchestration scaffold (cases filled in later tasks)
 # ---------------------------------------------------------------------------
 
@@ -189,13 +213,43 @@ class Outcome:
         return f"{prefix}: {self.name}" + (f" — {self.detail}" if self.detail else "")
 
 
+def case_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
+    name = "zerohop"
+    pre = health_stats()
+    pkt_id = 0xA1A1A1A1
+    body = build_envelope(
+        channel   = "LongFast",
+        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload   = b"hello-zerohop",
+        packet_id = pkt_id,
+        from_node = 0xDEADBEEF,
+        hop_limit = 3,
+        hop_start = 3,
+    )
+    pub.publish(topic_for("LongFast"), body)
+    time.sleep(SETTLE_SECONDS)
+
+    delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not delivered:
+        return Outcome(name, False, "no packet with our id was delivered")
+    hop = _parse_hop_limit(delivered[-1].payload)
+    if hop != 0:
+        return Outcome(name, False, f"delivered hop_limit={hop}, expected 0")
+
+    post = health_stats()
+    if post.get("zerohop", 0) - pre.get("zerohop", 0) < 1:
+        return Outcome(name, False, "stats.zerohop did not increment")
+    return Outcome(name)
+
+
 def run_all() -> int:
     sub = Subscriber(EMQX_HOST, EMQX_PORT)
     sub.start()
     pub = Publisher(EMQX_HOST, EMQX_PORT)
     try:
-        outcomes: list[Outcome] = []
-        # cases will be appended in the next tasks
+        outcomes: list[Outcome] = [
+            case_zerohop(pub, sub),
+        ]
         for o in outcomes:
             print(o.line(), flush=True)
         failed = [o for o in outcomes if not o.passed]
