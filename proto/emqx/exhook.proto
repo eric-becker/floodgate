@@ -1,6 +1,6 @@
 // Copyright (c) 2020-2026 EMQ Technologies Co., Ltd. All Rights Reserved.
 // Licensed under the Apache License, Version 2.0
-// Source: https://github.com/emqx/emqx/blob/release-60/apps/emqx_exhook/priv/protos/exhook.proto
+// Source: https://github.com/emqx/emqx/blob/release-62/apps/emqx_exhook/priv/protos/exhook.proto
 //
 // v3: EMQX 5.9.0+ / EMQX 6.x
 // v2: EMQX 5.0–5.8.x

@@ -6,7 +6,7 @@
 
 services:
   emqx:
-    image: emqx/emqx:6.1.1
+    image: emqx/emqx:6.2.0
     container_name: floodgate-test-emqx
     networks: [floodgate-test-net]
     ports:
