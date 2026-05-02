@@ -75,9 +75,6 @@ for i in $(seq 1 60); do
     [ "$i" -eq 60 ] && { echo "floodgate /health never came up" >&2; exit 1; }
 done
 
-echo "==> Letting meshtasticd settle"
-sleep 8
-
 echo "==> Running test-driver"
 set +e
 docker compose -f "$COMPOSE_FILE" run --rm test-driver

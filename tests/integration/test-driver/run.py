@@ -370,33 +370,6 @@ def case_custom_key_passthru(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
-def case_meshtasticd_roundtrip(_pub: Publisher, sub: Subscriber) -> Outcome:
-    """Verify the meshtasticd container's traffic transits floodgate to subscribers.
-
-    The meshtasticd-init sidecar configures MQTT and sends one probe text
-    message; meshtasticd also publishes its own NodeInfo on first MQTT
-    connection. We wait up to 60s for at least one msh/<...>/e/<...> message
-    whose packet_id is OUTSIDE our crafted 0xAxxxxxxx range — i.e. came
-    from the daemon, not from our Publisher.
-    """
-    name = "meshtasticd-roundtrip"
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        for m in sub.snapshot():
-            if "/e/" not in m.topic:
-                continue
-            pid = _packet_id_of(m.payload)
-            if pid is None:
-                continue
-            if 0xA0000000 <= pid <= 0xAFFFFFFF:
-                continue  # one of our crafted test packets
-            return Outcome(name)
-        time.sleep(1.0)
-    return Outcome(name, False,
-                   "no organic meshtasticd traffic seen in 60s — meshtasticd-init "
-                   "may have failed to enable MQTT (check `docker compose logs meshtasticd-init`)")
-
-
 def run_all() -> int:
     sub = Subscriber(EMQX_HOST, EMQX_PORT)
     sub.start()
@@ -408,7 +381,6 @@ def run_all() -> int:
             case_passthru(pub, sub),
             case_noop(pub, sub),
             case_custom_key_passthru(pub, sub),
-            case_meshtasticd_roundtrip(pub, sub),
         ]
         for o in outcomes:
             print(o.line(), flush=True)

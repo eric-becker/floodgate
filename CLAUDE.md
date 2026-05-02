@@ -24,9 +24,9 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru �
 | `src/floodgate/health.py`        | HTTP health check server on `health_port`. |
 | `src/floodgate/__main__.py`      | CLI entry point. |
 | `proto/emqx/exhook.proto`        | EMQX ExHook interface definition. |
-| `docker-compose.test.yaml`       | Integration test stack (emqx, floodgate, exhook-init, meshtasticd, meshtasticd-init, test-driver) on an isolated bridge network. |
+| `docker-compose.test.yaml`       | Integration test stack (emqx, floodgate, exhook-init, test-driver) on an isolated bridge network. |
 | `scripts/run-integration.sh`     | Integration harness orchestrator — `--keep` leaves the stack up, `--teardown` removes it. |
-| `tests/integration/`             | Integration test assets: floodgate config, ExHook init container, meshtasticd init sidecar, test-driver image + cases. |
+| `tests/integration/`             | Integration test assets: floodgate config, ExHook init container, test-driver image + cases. |
 
 ## Dev Setup
 
