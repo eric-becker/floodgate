@@ -331,6 +331,45 @@ def case_noop(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
+def case_custom_key_passthru(pub: Publisher, sub: Subscriber) -> Outcome:
+    """Channel NOT in zerohop_channels, encrypted with a key floodgate doesn't have.
+
+    floodgate cannot decrypt the inner Data, so it cannot read the portnum.
+    The drop filter must therefore NOT fire even if drop_portnums would
+    otherwise match. Because the channel is not in zerohop_channels, the
+    packet is delivered byte-identically.
+    """
+    name = "custom-key-passthru"
+    pre = health_stats()
+    pkt_id = 0xA5A5A5A5
+    body = build_envelope(
+        channel   = "PrivateNet",
+        portnum   = portnums_pb2.PortNum.RANGE_TEST_APP,  # would match drop_portnums if readable
+        payload   = b"opaque",
+        packet_id = pkt_id,
+        from_node = 0xDEADBEEF,
+        hop_limit = 3,
+        key       = CUSTOM_KEY,
+    )
+    pub.publish(topic_for("PrivateNet"), body)
+    time.sleep(SETTLE_SECONDS)
+
+    delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not delivered:
+        return Outcome(name, False, "packet was not delivered to subscriber")
+    if delivered[-1].payload != body:
+        return Outcome(name, False,
+                       "delivered payload was modified; passthru must be byte-identical")
+
+    post = health_stats()
+    if post.get("passthru", 0) - pre.get("passthru", 0) < 1:
+        return Outcome(name, False, "stats.passthru did not increment")
+    if post.get("dropped", 0) - pre.get("dropped", 0) > 0:
+        return Outcome(name, False,
+                       "stats.dropped incremented; drop must not fire on unreadable portnum")
+    return Outcome(name)
+
+
 def run_all() -> int:
     sub = Subscriber(EMQX_HOST, EMQX_PORT)
     sub.start()
@@ -341,6 +380,7 @@ def run_all() -> int:
             case_drop(pub, sub),
             case_passthru(pub, sub),
             case_noop(pub, sub),
+            case_custom_key_passthru(pub, sub),
         ]
         for o in outcomes:
             print(o.line(), flush=True)
