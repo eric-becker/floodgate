@@ -269,6 +269,39 @@ def case_drop(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
+def case_passthru(pub: Publisher, sub: Subscriber) -> Outcome:
+    """Channel NOT in zerohop_channels — packet must transit unchanged."""
+    name = "passthru"
+    pre = health_stats()
+    pkt_id = 0xA3A3A3A3
+    body = build_envelope(
+        channel   = "PrivateClear",
+        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload   = b"hello-private",
+        packet_id = pkt_id,
+        from_node = 0xDEADBEEF,
+        hop_limit = 3,
+        key       = DEFAULT_KEY,
+    )
+    pub.publish(topic_for("PrivateClear"), body)
+    time.sleep(SETTLE_SECONDS)
+
+    delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not delivered:
+        return Outcome(name, False, "packet was not delivered to subscriber")
+    if delivered[-1].payload != body:
+        return Outcome(name, False,
+                       "delivered payload was modified; passthru must be byte-identical")
+    hop = _parse_hop_limit(delivered[-1].payload)
+    if hop != 3:
+        return Outcome(name, False, f"hop_limit={hop}, expected 3 (no zerohop on this channel)")
+
+    post = health_stats()
+    if post.get("passthru", 0) - pre.get("passthru", 0) < 1:
+        return Outcome(name, False, "stats.passthru did not increment")
+    return Outcome(name)
+
+
 def run_all() -> int:
     sub = Subscriber(EMQX_HOST, EMQX_PORT)
     sub.start()
@@ -277,6 +310,7 @@ def run_all() -> int:
         outcomes: list[Outcome] = [
             case_zerohop(pub, sub),
             case_drop(pub, sub),
+            case_passthru(pub, sub),
         ]
         for o in outcomes:
             print(o.line(), flush=True)
