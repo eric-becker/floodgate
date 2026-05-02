@@ -105,9 +105,15 @@ docker compose up --build -d
 
 After startup, register the ExHook per the [Deployment](#deployment) instructions above.
 
-### Kubernetes
+### Kubernetes (Helm)
 
-See [k8s/](k8s/) — Deployment, Service, and ConfigMap. The Deployment uses a rolling update strategy for zero-downtime upgrades. Register the ExHook at `http://floodgate:9000` after applying.
+```bash
+helm install floodgate ./charts/floodgate -n floodgate --create-namespace
+```
+
+See [charts/floodgate/](charts/floodgate/) for the full values reference. The chart renders a Deployment with rolling updates, a ClusterIP Service, ConfigMap, ServiceAccount, and an optional PodDisruptionBudget; ConfigMap changes trigger automatic rolling restarts via a checksum annotation. Register the ExHook at `http://floodgate.floodgate.svc:9000` after install.
+
+The flat manifests in [k8s/](k8s/) are still present for `kubectl apply -f` users but are deprecated in favour of the chart.
 
 ### Source install
 
@@ -236,7 +242,7 @@ The Kubernetes manifests in [k8s/](k8s/) use `type: ClusterIP` so neither port i
 
 ### Container hardening
 
-The production container image runs as `nobody` (UID 65534) with a read-only filesystem, no Linux capabilities, and no privilege escalation. See [Dockerfile](Dockerfile) and [k8s/deployment.yaml](k8s/deployment.yaml).
+The production container image runs as `nobody` (UID 65534) with a read-only filesystem, no Linux capabilities, and no privilege escalation. See [Dockerfile](Dockerfile) and the chart's [containerSecurityContext defaults](charts/floodgate/values.yaml).
 
 ## Verifying operation
 
