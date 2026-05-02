@@ -10,14 +10,14 @@ a logic failure.
 What is tested:
   - The Dockerfile builds without error
   - The container starts and the health endpoint returns HTTP 200
-  - The /health response body is valid JSON with {"status": "ok"}
-  - Graceful shutdown: the container stops cleanly within a timeout
+  - The container runs as a non-root user
+
+Health-response shape (JSON validity, stats keys, 404 on unknown paths) is
+covered by test_health.py without a Docker rebuild.
 """
 
-import json
 import subprocess
 import time
-import urllib.error
 import urllib.request
 
 import pytest
@@ -102,28 +102,6 @@ class TestContainerSmoke:
     def test_health_returns_200(self, running_container):
         status, _ = _wait_for_health(f"http://localhost:{HEALTH_PORT}/health")
         assert status == 200
-
-    def test_health_body_is_valid_json(self, running_container):
-        _, body = _wait_for_health(f"http://localhost:{HEALTH_PORT}/health")
-        data = json.loads(body)
-        assert data["status"] == "ok"
-
-    def test_health_body_has_stats(self, running_container):
-        _, body = _wait_for_health(f"http://localhost:{HEALTH_PORT}/health")
-        data = json.loads(body)
-        stats = data["stats"]
-        for key in ("zerohop", "passthru", "noop", "dropped",
-                    "skipped", "errors", "total"):
-            assert key in stats, f"missing stats key: {key}"
-
-    def test_unknown_path_returns_404(self, running_container):
-        try:
-            with urllib.request.urlopen(
-                f"http://localhost:{HEALTH_PORT}/notfound", timeout=5
-            ) as resp:
-                pytest.fail(f"Expected 404 but got {resp.status}")
-        except urllib.error.HTTPError as exc:
-            assert exc.code == 404
 
     def test_container_is_running(self, running_container):
         result = _docker("inspect", "--format", "{{.State.Status}}", running_container)
