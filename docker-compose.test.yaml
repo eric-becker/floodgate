@@ -53,6 +53,25 @@ services:
         condition: service_healthy
     restart: "no"
 
+  test-driver:
+    build:
+      context: tests/integration/test-driver
+    image: floodgate-test-driver:ci
+    container_name: floodgate-test-driver
+    networks: [floodgate-test-net]
+    depends_on:
+      emqx:
+        condition: service_healthy
+      floodgate:
+        condition: service_healthy
+      exhook-init:
+        condition: service_completed_successfully
+    profiles: ["driver"]
+    environment:
+      EMQX_HOST: "emqx"
+      EMQX_PORT: "1883"
+      FLOODGATE_HEALTH_URL: "http://floodgate:8080/health"
+
 networks:
   floodgate-test-net:
     name: floodgate-test-net
