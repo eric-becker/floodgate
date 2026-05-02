@@ -40,12 +40,8 @@ class TestHealthEndpoint:
     def setup_method(self):
         # Reset both rolling and lifetime counters before each test
         with packet_stats._lock:
-            packet_stats.zerohop = 0
-            packet_stats.passthru = 0
-            packet_stats.noop = 0
-            packet_stats.skipped = 0
-            packet_stats.errors = 0
-            for k in packet_stats._lifetime:
+            for k in ("zerohop", "passthru", "noop", "dropped", "skipped", "errors"):
+                setattr(packet_stats, k, 0)
                 packet_stats._lifetime[k] = 0
 
     def test_health_returns_200(self):
@@ -79,8 +75,17 @@ class TestHealthEndpoint:
             _, body = _get(f"{base}/health")
             data = json.loads(body)
             stats = data["stats"]
-            for key in ("zerohop", "passthru", "noop", "skipped", "errors", "total"):
+            for key in ("zerohop", "passthru", "noop", "dropped",
+                        "skipped", "errors", "total"):
                 assert key in stats, f"missing key: {key}"
+        finally:
+            server.shutdown()
+
+    def test_health_body_dropped_starts_at_zero(self):
+        server, base = _start_test_server()
+        try:
+            _, body = _get(f"{base}/health")
+            assert json.loads(body)["stats"]["dropped"] == 0
         finally:
             server.shutdown()
 

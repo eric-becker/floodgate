@@ -12,8 +12,11 @@ build/
 .venv/
 venv/
 
-# Environment files
-.env
+# Personal env overrides — the tracked .env carries shared dev-convenience
+# vars (PYTHONDONTWRITEBYTECODE etc.); .env.local is for per-developer extras
+# and stays out of git. Don't put secrets in either; floodgate has no secret
+# config.
+.env.local
 
 # Test caches and coverage artefacts
 .pytest_cache/

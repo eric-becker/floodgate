@@ -1,23 +1,29 @@
 # floodgate
 
-Zero-hop MQTT anti-flood service for Meshtastic. Intercepts MQTT PUBLISH events via
-EMQX ExHook (gRPC) and sets `MeshPacket.hop_limit=0` in-flight before delivery to subscribers.
+MQTT anti-flood service for Meshtastic with two operations:
+
+- **Zerohop** — modify `MeshPacket.hop_limit` to 0 in-flight, then deliver. Default behaviour for the standard public channel presets.
+- **Drop** — deny a publish entirely so EMQX never delivers it. Off by default; intended for portnum-based spam (e.g. `RANGE_TEST_APP` on the public channels).
+
+Drop runs *before* zerohop. Both are evaluated per message via the EMQX ExHook gRPC interface.
 
 ## Architecture
 
 ```
-Gateway → EMQX → [ExHook gRPC] → floodgate → modified payload → EMQX → Subscribers
+Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru → EMQX → Subscribers
 ```
 
 | File | Role |
 |------|------|
-| `src/floodgate/exhook_server.py` | gRPC server; EMQX connects here |
-| `src/floodgate/zerohop.py` | Core logic: packet decode, zero-hop, structured logging |
-| `src/floodgate/config.py` | Config loader; channel policy evaluation |
-| `src/floodgate/log_setup.py` | Logging formatter; text and JSON (Loki) modes |
-| `src/floodgate/health.py` | HTTP health check server on `health_port` |
-| `src/floodgate/__main__.py` | CLI entry point |
-| `proto/emqx/exhook.proto` | EMQX ExHook interface definition |
+| `src/floodgate/exhook_server.py` | gRPC server; EMQX connects here. Maps process_message actions to ExHook responses. |
+| `src/floodgate/zerohop.py`       | Per-message pipeline: drop check → zerohop check → structured logging. |
+| `src/floodgate/config.py`        | Config loader, schema validation (rejects removed keys), policy helpers `should_zerohop` / `should_drop`. |
+| `src/floodgate/decrypt.py`       | AES-128-CTR decryption with the Meshtastic default key (drop's portnum lookup needs this for `/e/` packets). |
+| `src/floodgate/portnum.py`       | Portnum extraction from `/e/` (decrypt + Data parse) and `/json/` payloads. |
+| `src/floodgate/log_setup.py`     | Logging formatter; text and JSON (Loki) modes. |
+| `src/floodgate/health.py`        | HTTP health check server on `health_port`. |
+| `src/floodgate/__main__.py`      | CLI entry point. |
+| `proto/emqx/exhook.proto`        | EMQX ExHook interface definition. |
 
 ## Dev Setup
 
@@ -31,11 +37,12 @@ pytest tests/ --ignore=tests/test_container_smoke.py -q   # no Docker required
 pytest tests/ -q   # full suite including container smoke test (requires Docker)
 ```
 
-Tests mock protobuf imports for the routing-logic suite, so it runs without
-protobufs (handy for fast iteration). Tests under
-`tests/payloads/protobuf/` exercise `zerohop_protobuf` against real binary
-fixtures and require the generated stubs — they skip automatically when
-the stubs aren't present, and CI generates them before running tests.
+Routing-logic tests mock the low-level zerohop functions, so the suite runs
+without Meshtastic protobufs (handy for fast iteration). Tests that exercise
+real protobuf payloads (under `tests/payloads/protobuf/`, plus the decrypt
+and portnum tests that build synthetic envelopes) skip automatically via
+`pytest.importorskip("meshtastic")` when the generated stubs aren't present.
+CI generates the stubs before running tests, so the full suite runs there.
 
 ## Running
 
@@ -44,7 +51,7 @@ floodgate --config config.yaml
 floodgate --config config.yaml -v   # verbose DEBUG logging (decode steps, gRPC calls)
 ```
 
-Per-message outcomes (`[ZEROHOP]`, `[PASSTHRU]`, `[NOOP]`) are logged at **INFO** level. No
+Per-message outcomes (`[ZEROHOP]`, `[PASSTHRU]`, `[NOOP]`, `[DROPPED]`) are logged at **INFO** level. No
 special flag needed to see them. `-v` enables DEBUG for internal decode and gRPC detail.
 
 Or with Docker Compose (includes EMQX):
@@ -65,14 +72,20 @@ After startup, register the ExHook in EMQX (see README Deployment section for th
 
 ## Key Config Options
 
+Drop runs **before** zerohop. A packet matched by drop is denied entirely and never reaches the zerohop check.
+
 | Key | Default | Effect |
 |-----|---------|--------|
-| `channel_policy` | `blacklist` | `blacklist` (default): zero-hop only listed channels. `whitelist`: zero-hop all except listed. |
-| `channel_blacklist` | 8 standard presets | Channels to zero-hop (blacklist mode). Default = all standard Meshtastic public presets. |
-| `channel_whitelist` | `[]` | Channels exempt from zero-hop (whitelist mode). Empty = zero-hop everything. |
+| `zerohop_enabled` | `true` | Master switch for the zero-hop modifier. |
+| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` zeroed. |
+| `drop_enabled` | `false` | Master switch for the drop filter. |
+| `drop_channels` | `"zerohop_channels"` | Drop scope. List of channels, the literal string `"zerohop_channels"` to inherit, or `null` for all channels. |
+| `drop_portnums` | `[]` | Meshtastic portnums (proto enum names like `RANGE_TEST_APP`) to drop. Only readable on default-key (`AQ==`) protobuf channels and on JSON channels. |
 | `log_level` | `INFO` | `INFO` logs per-message outcomes. `DEBUG` adds decode/gRPC internals. |
 | `log_format` | `text` | `text` (default) or `json` for Loki/Grafana. Override with `FLOODGATE_LOG_FORMAT` env var. |
 | `stats_log` | `true` | Log periodic stats summaries. Set `false` to disable. |
+
+The pre-rename keys `channel_policy` / `channel_blacklist` / `channel_whitelist` were removed. floodgate refuses to load a config containing any of them and prints the new equivalents.
 
 ## Documentation and Test Discipline
 

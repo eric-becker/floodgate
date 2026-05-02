@@ -85,11 +85,13 @@ class TestStructuredTextFormatter:
     def test_stats_event_renders_stats_tag(self):
         output = self._format(
             "stats", event="stats", interval_s=60,
-            zerohop=5, passthru=1, noop=0, skipped=10, errors=0, total=16,
+            zerohop=5, passthru=1, noop=0, dropped=2, skipped=10,
+            errors=0, total=18,
         )
         assert "[STATS]" in output
         assert "zerohop=5" in output
-        assert "total=16" in output
+        assert "dropped=2" in output
+        assert "total=18" in output
 
     def test_plain_message_passes_through(self):
         output = self._format("ExHook gRPC server listening on port 9000")
@@ -178,17 +180,29 @@ class TestJsonFormatterSnapshots:
     def test_stats_event_fields(self):
         data = self._format_json(
             "stats", event="stats",
-            interval_s=60, zerohop=142, passthru=1, noop=0,
-            skipped=1050, errors=0, total=1193,
+            interval_s=60, zerohop=142, passthru=1, noop=0, dropped=4,
+            skipped=1050, errors=0, total=1197,
         )
-        assert data["event"] == "stats"
+        assert data["event"]      == "stats"
         assert data["interval_s"] == 60
-        assert data["zerohop"] == 142
-        assert data["passthru"] == 1
-        assert data["noop"] == 0
-        assert data["skipped"] == 1050
-        assert data["errors"] == 0
-        assert data["total"] == 1193
+        assert data["zerohop"]    == 142
+        assert data["passthru"]   == 1
+        assert data["noop"]       == 0
+        assert data["dropped"]    == 4
+        assert data["skipped"]    == 1050
+        assert data["errors"]     == 0
+        assert data["total"]      == 1197
+
+    def test_dropped_message_fields(self):
+        data = self._format_json(
+            "dropped", event="message", outcome="dropped",
+            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
+            encoding="e", portnum="RANGE_TEST_APP", id="0x12345678",
+            **{"from": "!abcd1234", "to": "!ffffffff"},
+        )
+        assert data["outcome"] == "dropped"
+        assert data["portnum"] == "RANGE_TEST_APP"
+        assert data["channel"] == "LongFast"
 
     def test_timestamp_format_iso8601(self):
         data = self._format_json("ts check")
@@ -245,6 +259,20 @@ class TestTextFormatterSnapshots:
         assert "[floodgate.zerohop]" in output
         assert "INFO" in output
 
+    def test_dropped_exact_output_includes_portnum(self):
+        output = self._format_text(
+            "dropped", event="message", outcome="dropped",
+            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
+            encoding="e", portnum="RANGE_TEST_APP", id="0x12345678",
+            **{"from": "!abcd1234", "to": "!ffffffff"},
+        )
+        expected_tail = (
+            "[DROPPED] topic=msh/US/2/e/LongFast/!1234 channel=LongFast"
+            " encoding=e portnum=RANGE_TEST_APP id=0x12345678"
+            " from=!abcd1234 to=!ffffffff"
+        )
+        assert output.endswith(expected_tail)
+
     def test_noop_exact_output(self):
         output = self._format_text(
             "noop", event="message", outcome="noop",
@@ -284,12 +312,12 @@ class TestTextFormatterSnapshots:
     def test_stats_exact_field_order(self):
         output = self._format_text(
             "stats", event="stats",
-            interval_s=60, zerohop=142, passthru=1, noop=0,
-            skipped=1050, errors=0, total=1193,
+            interval_s=60, zerohop=142, passthru=1, noop=0, dropped=4,
+            skipped=1050, errors=0, total=1197,
         )
         expected_tail = (
             "[STATS] interval_s=60 zerohop=142 passthru=1"
-            " noop=0 skipped=1050 errors=0 total=1193"
+            " noop=0 dropped=4 skipped=1050 errors=0 total=1197"
         )
         assert output.endswith(expected_tail)
 

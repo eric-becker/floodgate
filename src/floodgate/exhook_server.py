@@ -1,4 +1,4 @@
-"""EMQX ExHook gRPC server — intercepts PUBLISH events to modify payloads in-flight."""
+"""EMQX ExHook gRPC server — intercepts PUBLISH events to drop or modify in-flight."""
 
 import logging
 import threading
@@ -6,7 +6,7 @@ from concurrent import futures
 
 import grpc
 
-from .zerohop import process_message
+from .zerohop import ACTION_DROP, ACTION_MODIFY, process_message
 from .zerohop import stats as packet_stats
 
 logger = logging.getLogger(__name__)
@@ -54,15 +54,21 @@ class HookProviderServicer:
     def OnMessagePublish(self, request, context):
         msg = request.message
         logger.debug("OnMessagePublish: topic=%s bytes=%d", msg.topic, len(msg.payload))
-        modified_payload = process_message(msg.topic, msg.payload, self.config)
-        result = "modified" if modified_payload is not None else "pass"
-        logger.debug("OnMessagePublish: result=%s", result)
+        result = process_message(msg.topic, msg.payload, self.config)
+        logger.debug("OnMessagePublish: action=%s", result.action)
 
         resp = _exhook_pb2.ValuedResponse()
-        if modified_payload is not None:
+        if result.action == ACTION_MODIFY:
             resp.type = _exhook_pb2.ValuedResponse.STOP_AND_RETURN
             resp.message.CopyFrom(msg)
-            resp.message.payload = modified_payload
+            resp.message.payload = result.payload
+        elif result.action == ACTION_DROP:
+            # EMQX honors `allow_publish: false` in message headers to deny
+            # the publish. STOP_AND_RETURN ends the hook chain so EMQX uses
+            # this response directly.
+            resp.type = _exhook_pb2.ValuedResponse.STOP_AND_RETURN
+            resp.message.CopyFrom(msg)
+            resp.message.headers["allow_publish"] = "false"
         else:
             resp.type = _exhook_pb2.ValuedResponse.IGNORE
         return resp
@@ -148,6 +154,7 @@ def _stats_reporter(interval_s: int, stop_event: threading.Event,
                     "zerohop":    snap["zerohop"],
                     "passthru":   snap["passthru"],
                     "noop":       snap["noop"],
+                    "dropped":    snap["dropped"],
                     "skipped":    snap["skipped"],
                     "errors":     snap["errors"],
                     "total":      snap["total"],
@@ -162,34 +169,51 @@ def _stats_reporter(interval_s: int, stop_event: threading.Event,
 # ---------------------------------------------------------------------------
 
 def _log_startup_policy(config: dict):
-    policy        = config.get("channel_policy", "whitelist")
-    interval      = config.get("stats_interval_s", 60)
-    topic_filter  = config.get("topic_filter", "msh/#")
+    interval     = config.get("stats_interval_s", 60)
+    topic_filter = config.get("topic_filter", "msh/#")
     logger.info("Topic filter: %s", topic_filter)
 
-    if policy == "whitelist":
-        channels = config.get("channel_whitelist", [])
+    if config.get("zerohop_enabled", True):
+        channels = config.get("zerohop_channels", []) or []
         if channels:
             logger.info(
-                "Channel policy: WHITELIST — zero-hopping all channels EXCEPT: %s",
+                "Zerohop ENABLED — zero-hopping packets on: %s",
                 ", ".join(channels),
             )
         else:
             logger.info(
-                "Channel policy: WHITELIST — whitelist is empty, zero-hopping ALL channels"
+                "Zerohop ENABLED — `zerohop_channels` is empty, no channels will be zero-hopped"
             )
     else:
-        channels = config.get("channel_blacklist", [])
-        logger.info(
-            "Channel policy: BLACKLIST — zero-hopping only: %s",
-            ", ".join(channels) if channels else "(none configured)",
-        )
+        logger.info("Zerohop DISABLED — packets will not be zero-hopped")
+
+    if config.get("drop_enabled", False):
+        portnums = config.get("drop_portnums", []) or []
+        if not portnums:
+            logger.warning(
+                "Drop ENABLED but `drop_portnums` is empty — drop is a no-op"
+            )
+        else:
+            scope = _format_drop_channel_scope(config)
+            logger.info(
+                "Drop ENABLED — dropping portnums [%s] on %s",
+                ", ".join(portnums), scope,
+            )
+    else:
+        logger.info("Drop DISABLED")
 
     logger.info("Stats will be logged every %d seconds", interval)
     logger.info(
-        "Per-message outcomes ([ZEROHOP]/[PASSTHRU]/[NOOP]) logged at INFO.  "
+        "Per-message outcomes ([ZEROHOP]/[PASSTHRU]/[NOOP]/[DROPPED]) logged at INFO. "
         "Run with -v for verbose DEBUG."
     )
+
+
+def _format_drop_channel_scope(config: dict) -> str:
+    drop_set = config.get("_drop_channels_set")
+    if drop_set is None:
+        return "all channels"
+    return f"channels [{', '.join(sorted(drop_set))}]"
 
 
 def serve(config: dict):

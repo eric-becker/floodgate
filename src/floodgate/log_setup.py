@@ -3,20 +3,23 @@
 import logging
 
 # Fields rendered by StructuredTextFormatter, in display order.
+# `portnum` appears on dropped events (and is harmless when absent on others).
 _MESSAGE_FIELDS = (
-    "topic", "channel", "encoding", "id", "from", "to",
+    "topic", "channel", "encoding", "portnum", "id", "from", "to",
     "hop_limit", "hop_start", "relay", "via_mqtt",
 )
 _STATS_FIELDS = (
-    "interval_s", "zerohop", "passthru", "noop", "skipped", "errors", "total",
+    "interval_s", "zerohop", "passthru", "noop", "dropped",
+    "skipped", "errors", "total",
 )
 
 # Outcome tags → display labels for text mode
 _OUTCOME_TAGS = {
-    "zerohop": "[ZEROHOP]",
+    "zerohop":  "[ZEROHOP]",
     "passthru": "[PASSTHRU]",
-    "noop": "[NOOP]",
-    "warn": "[WARN]",
+    "noop":     "[NOOP]",
+    "dropped":  "[DROPPED]",
+    "warn":     "[WARN]",
 }
 
 

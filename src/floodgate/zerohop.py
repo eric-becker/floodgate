@@ -1,4 +1,4 @@
-"""Core zero-hop logic — processes protobuf (/e/) and JSON (/json/) Meshtastic packets."""
+"""Per-message processing: drop filter, zero-hop logic, structured logging."""
 
 import json as _json
 import logging
@@ -27,27 +27,60 @@ def _load_protos():
 
 
 # ---------------------------------------------------------------------------
+# ExHook actions
+# ---------------------------------------------------------------------------
+
+# `process_message` returns one of these so the gRPC layer can translate
+# directly into an EMQX response without re-deriving intent. Strings (not
+# enums) keep log records and tests legible.
+ACTION_PASSTHRU = "passthru"   # deliver the original message unchanged
+ACTION_MODIFY   = "modify"     # deliver the modified payload (zerohop)
+ACTION_DROP     = "drop"       # deny the publish entirely
+
+
+@dataclass
+class ProcessResult:
+    """Outcome of processing one MQTT message.
+
+    `payload` is only meaningful when `action == ACTION_MODIFY`.
+    """
+    action:  str
+    payload: bytes | None = None
+
+    @classmethod
+    def passthru(cls):
+        return cls(ACTION_PASSTHRU)
+
+    @classmethod
+    def modify(cls, payload: bytes):
+        return cls(ACTION_MODIFY, payload)
+
+    @classmethod
+    def drop(cls):
+        return cls(ACTION_DROP)
+
+
+# ---------------------------------------------------------------------------
 # Statistics
 # ---------------------------------------------------------------------------
 
-_COUNTER_NAMES = ("zerohop", "passthru", "noop", "skipped", "errors")
+_COUNTER_NAMES = ("zerohop", "passthru", "noop", "dropped", "skipped", "errors")
 
 
 @dataclass
 class AntifloodStats:
     """Thread-safe packet counters.
 
-    Two sets: rolling window (reset each stats interval) and lifetime
-    (cumulative, never reset). The stats reporter reads rolling via reset();
-    the health endpoint reads lifetime via snapshot().
+    Two views: rolling (reset every stats interval, surfaced in periodic
+    logs) and lifetime (cumulative, surfaced via /health).
     """
-    # Rolling window — reset by stats reporter each interval
     zerohop:  int = 0
     passthru: int = 0
     noop:     int = 0
+    dropped:  int = 0
     skipped:  int = 0
     errors:   int = 0
-    # Lifetime — never reset
+
     _lifetime: dict = field(default_factory=lambda: {k: 0 for k in _COUNTER_NAMES})
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -58,21 +91,22 @@ class AntifloodStats:
 
     @property
     def total(self) -> int:
-        return self.zerohop + self.passthru + self.noop + self.skipped + self.errors
+        return sum(getattr(self, k) for k in _COUNTER_NAMES)
 
     def snapshot(self) -> dict:
-        """Return lifetime cumulative counters (for health endpoint)."""
+        """Lifetime cumulative counters (for /health)."""
         with self._lock:
             snap = dict(self._lifetime)
             snap["total"] = sum(self._lifetime.values())
             return snap
 
     def reset(self) -> dict:
-        """Return rolling window snapshot then reset rolling counters to zero."""
+        """Rolling-window snapshot, then zero the rolling counters."""
         with self._lock:
             snap = {k: getattr(self, k) for k in _COUNTER_NAMES}
-            snap["total"] = self.total
-            self.zerohop = self.passthru = self.noop = self.skipped = self.errors = 0
+            snap["total"] = sum(snap.values())
+            for k in _COUNTER_NAMES:
+                setattr(self, k, 0)
             return snap
 
 
@@ -283,11 +317,11 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def process_message(topic: str, payload: bytes, config: dict) -> bytes | None:
-    """Process one MQTT message; return modified payload or None (pass-through).
+def process_message(topic: str, payload: bytes, config: dict) -> ProcessResult:
+    """Process one MQTT message; return a ProcessResult describing the action.
 
-    Outcomes logged at INFO: zerohop, passthru, noop, warn.
-    Non-packet topics silently skipped (counted in stats).
+    Outcomes logged at INFO: zerohop, passthru, noop, dropped, warn.
+    Non-packet topics are silently skipped (counted in stats only).
     """
     try:
         return _process_message_inner(topic, payload, config)
@@ -298,21 +332,46 @@ def process_message(topic: str, payload: bytes, config: dict) -> bytes | None:
             topic, type(exc).__name__, exc,
             exc_info=True,
         )
-        return None
+        return ProcessResult.passthru()
 
 
-def _process_message_inner(topic: str, payload: bytes, config: dict) -> bytes | None:
-    from .config import should_zerohop
+def _process_message_inner(topic: str, payload: bytes, config: dict) -> ProcessResult:
+    from .config import should_drop, should_zerohop
+    from .portnum import extract_portnum_json, extract_portnum_protobuf
 
     parsed = parse_meshtastic_topic(topic)
     if parsed is None:
         # Map reports, stat topics, non-msh — silently ignore.
         # Counted in 'skipped' for stats but no per-message log line.
         stats.inc("skipped")
-        return None
+        return ProcessResult.passthru()
 
     channel, encoding = parsed
 
+    # ---- Drop check (runs before zerohop) ----
+    if config.get("drop_enabled"):
+        portnum = (extract_portnum_json(payload) if encoding == "json"
+                   else extract_portnum_protobuf(payload))
+        if should_drop(config, channel, portnum):
+            stats.inc("dropped")
+            meta = _peek_meta(encoding, payload)
+            logger.info(
+                "dropped",
+                extra={
+                    "event":    "message",
+                    "outcome":  "dropped",
+                    "topic":    topic,
+                    "channel":  channel,
+                    "encoding": encoding,
+                    "portnum":  portnum,
+                    "id":       meta.get("packet_id"),
+                    "from":     _fmt_node(meta.get("sender")),
+                    "to":       _fmt_node(meta.get("destination")),
+                },
+            )
+            return ProcessResult.drop()
+
+    # ---- Zerohop check ----
     if not should_zerohop(config, channel):
         stats.inc("passthru")
         meta = _peek_meta(encoding, payload)
@@ -333,7 +392,7 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> bytes | 
                 "via_mqtt":  meta.get("via_mqtt"),
             },
         )
-        return None
+        return ProcessResult.passthru()
 
     if encoding == "json":
         modified, old_hop, meta = zerohop_json(payload)
@@ -353,7 +412,7 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> bytes | 
                 "bytes":    len(payload),
             },
         )
-        return None
+        return ProcessResult.passthru()
 
     if old_hop == 0:
         stats.inc("noop")
@@ -375,7 +434,7 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> bytes | 
                 "via_mqtt":  meta.get("via_mqtt"),
             },
         )
-        return None
+        return ProcessResult.passthru()
 
     stats.inc("zerohop")
     relay = meta.get("relay_node")
@@ -396,4 +455,4 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> bytes | 
             "via_mqtt":  meta.get("via_mqtt"),
         },
     )
-    return modified
+    return ProcessResult.modify(modified)
