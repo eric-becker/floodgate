@@ -57,6 +57,7 @@ jobs:
         run: |
           pytest tests/ -q \
             --ignore=tests/test_container_smoke.py \
+            --ignore=tests/integration \
             --cov=src/floodgate \
             --cov-report=term-missing \
             --cov-report=xml
@@ -90,6 +91,31 @@ jobs:
 
       - name: Run container smoke tests
         run: pytest tests/test_container_smoke.py -m smoke -v
+
+  # ---------------------------------------------------------------------------
+  # Integration test — full Docker Compose stack: emqx + floodgate + meshtasticd
+  # End-to-end validation of drop / zerohop / passthru / noop / custom-key /
+  # meshtasticd round-trip via subscriber capture and /health stats.
+  # ---------------------------------------------------------------------------
+  integration:
+    name: Integration test (compose stack)
+    runs-on: ubuntu-latest
+    needs: smoke
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run integration harness
+        run: ./scripts/run-integration.sh
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.test.yaml logs --no-color || true
+
+      - name: Always clean up
+        if: always()
+        run: docker compose -f docker-compose.test.yaml down -v --remove-orphans || true
 
   # ---------------------------------------------------------------------------
   # Manifest validation — verify k8s YAML is valid against the k8s schema
