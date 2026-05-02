@@ -18,6 +18,7 @@ for i in $(seq 1 60); do
         break
     fi
     sleep 1
+    [ "$i" -eq 60 ] && { echo "exhook-init: EMQX REST never came up" >&2; exit 1; }
 done
 
 echo "exhook-init: logging in"

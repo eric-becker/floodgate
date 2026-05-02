@@ -15,7 +15,7 @@ All PRs are squash-merged. One PR per feature or fix.
 
 ## CI jobs
 
-Every PR and push to `main` runs four jobs in sequence:
+Every PR and push to `main` runs five jobs in sequence:
 
 | Job | What it checks |
 |-----|----------------|

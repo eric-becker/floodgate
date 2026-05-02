@@ -97,6 +97,8 @@ services:
         condition: service_healthy
       exhook-init:
         condition: service_completed_successfully
+      meshtasticd-init:
+        condition: service_completed_successfully
     profiles: ["driver"]
     environment:
       EMQX_HOST: "emqx"
