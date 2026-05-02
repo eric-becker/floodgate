@@ -13,7 +13,7 @@ HOOK_NAME="floodgate"
 
 echo "exhook-init: waiting for EMQX REST at ${EMQX_URL} ..."
 for i in $(seq 1 60); do
-    if curl -sf -o /dev/null "${EMQX_URL}/api/v5/status"; then
+    if curl -sf --connect-timeout 2 --max-time 5 -o /dev/null "${EMQX_URL}/api/v5/status"; then
         echo "exhook-init: EMQX REST is up after ${i}s"
         break
     fi
@@ -21,7 +21,7 @@ for i in $(seq 1 60); do
 done
 
 echo "exhook-init: logging in"
-TOKEN=$(curl -sf -X POST "${EMQX_URL}/api/v5/login" \
+TOKEN=$(curl -sf --connect-timeout 2 --max-time 5 -X POST "${EMQX_URL}/api/v5/login" \
     -H 'Content-Type: application/json' \
     -d "{\"username\":\"${EMQX_USER}\",\"password\":\"${EMQX_PASS}\"}" \
     | jq -r .token)
@@ -42,23 +42,23 @@ BODY=$(cat <<EOF
 EOF
 )
 
-if curl -sf -o /dev/null "${EMQX_URL}/api/v5/exhooks/${HOOK_NAME}" \
+if curl -sf --connect-timeout 2 --max-time 5 -o /dev/null "${EMQX_URL}/api/v5/exhooks/${HOOK_NAME}" \
     -H "Authorization: Bearer ${TOKEN}"; then
     echo "exhook-init: hook '${HOOK_NAME}' exists — updating"
-    curl -sf -X PUT "${EMQX_URL}/api/v5/exhooks/${HOOK_NAME}" \
+    curl -sf --connect-timeout 2 --max-time 5 -X PUT "${EMQX_URL}/api/v5/exhooks/${HOOK_NAME}" \
         -H "Authorization: Bearer ${TOKEN}" \
         -H 'Content-Type: application/json' \
         -d "${BODY}" >/dev/null
 else
     echo "exhook-init: hook '${HOOK_NAME}' does not exist — creating"
-    curl -sf -X POST "${EMQX_URL}/api/v5/exhooks" \
+    curl -sf --connect-timeout 2 --max-time 5 -X POST "${EMQX_URL}/api/v5/exhooks" \
         -H "Authorization: Bearer ${TOKEN}" \
         -H 'Content-Type: application/json' \
         -d "${BODY}" >/dev/null
 fi
 
 echo "exhook-init: verifying registration"
-STATUS=$(curl -sf "${EMQX_URL}/api/v5/exhooks/${HOOK_NAME}" \
+STATUS=$(curl -sf --connect-timeout 2 --max-time 5 "${EMQX_URL}/api/v5/exhooks/${HOOK_NAME}" \
     -H "Authorization: Bearer ${TOKEN}" | jq -r '.status // "unknown"')
 echo "exhook-init: hook '${HOOK_NAME}' status=${STATUS}"
 
