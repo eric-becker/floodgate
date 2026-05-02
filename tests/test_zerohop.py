@@ -11,13 +11,13 @@ from floodgate.zerohop import (
     ACTION_DROP,
     ACTION_MODIFY,
     ACTION_PASSTHRU,
+    AntifloodStats,
     _fmt_node,
     _peek_meta,
     parse_meshtastic_topic,
     process_message,
     zerohop_json,
 )
-from floodgate.zerohop import stats as packet_stats
 
 # Directory of real-world Meshtastic payloads captured from gateways.
 # Each JSON file is the raw form exactly as published on /json/ topics; each
@@ -749,6 +749,54 @@ class TestProcessMessageUnmockedProtobuf:
             "zerohop", "noop", "passthru", "warn", "dropped",
         )
 
+    def test_synthetic_envelope_zerohop_round_trip(self, caplog):
+        """A real encrypted /e/ ServiceEnvelope built with hop_limit=3 flows
+        through process_message, returns ACTION_MODIFY with hop_limit zeroed,
+        and the inner Data still decrypts and parses cleanly."""
+        from meshtastic import mesh_pb2, mqtt_pb2, portnums_pb2
+
+        from floodgate.decrypt import decrypt as floodgate_decrypt
+        from tests.test_portnum import _build_encrypted_envelope
+
+        packet_id = 0xA1B2C3D4
+        from_node = 0x12345678
+        envelope_bytes = _build_encrypted_envelope(
+            mesh_pb2, mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+            payload_bytes=b"hello",
+            packet_id=packet_id,
+            from_node=from_node,
+            channel_name="LongFast",
+            hop_limit=3,
+        )
+
+        config = _make_config(zerohop_channels=["LongFast"])
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message(
+                "msh/US/2/e/LongFast/!00000000", envelope_bytes, config,
+            )
+
+        assert result.action == ACTION_MODIFY
+        assert result.payload is not None
+
+        modified = mqtt_pb2.ServiceEnvelope()
+        modified.ParseFromString(result.payload)
+        assert modified.packet.hop_limit == 0
+        assert modified.packet.id == packet_id
+        assert modified.channel_id == "LongFast"
+
+        plaintext = floodgate_decrypt(
+            modified.packet.encrypted, packet_id=packet_id, from_node=from_node,
+        )
+        inner = mesh_pb2.Data()
+        inner.ParseFromString(plaintext)
+        assert inner.portnum == portnums_pb2.PortNum.TEXT_MESSAGE_APP
+        assert inner.payload == b"hello"
+
+        outcome_records = [r for r in caplog.records if hasattr(r, "outcome")]
+        assert len(outcome_records) == 1
+        assert getattr(outcome_records[0], "outcome") == "zerohop"
+
 
 # ---------------------------------------------------------------------------
 # AntifloodStats — counter mechanics
@@ -756,29 +804,28 @@ class TestProcessMessageUnmockedProtobuf:
 
 class TestAntifloodStats:
 
-    def setup_method(self):
-        # Fresh counters per test — both rolling and lifetime
-        with packet_stats._lock:
-            for k in ("zerohop", "passthru", "noop", "dropped", "skipped", "errors"):
-                setattr(packet_stats, k, 0)
-                packet_stats._lifetime[k] = 0
+    @pytest.fixture
+    def stats(self, monkeypatch):
+        fresh = AntifloodStats()
+        monkeypatch.setattr("floodgate.zerohop.stats", fresh)
+        return fresh
 
-    def test_inc_increments_both_views(self):
-        packet_stats.inc("dropped")
-        assert packet_stats.dropped == 1
-        assert packet_stats.snapshot()["dropped"] == 1
+    def test_inc_increments_both_views(self, stats):
+        stats.inc("dropped")
+        assert stats.dropped == 1
+        assert stats.snapshot()["dropped"] == 1
 
-    def test_reset_zeros_rolling_keeps_lifetime(self):
+    def test_reset_zeros_rolling_keeps_lifetime(self, stats):
         for _ in range(3):
-            packet_stats.inc("dropped")
-        snap = packet_stats.reset()
+            stats.inc("dropped")
+        snap = stats.reset()
         assert snap["dropped"]                   == 3
-        assert packet_stats.dropped              == 0
-        assert packet_stats.snapshot()["dropped"] == 3
+        assert stats.dropped              == 0
+        assert stats.snapshot()["dropped"] == 3
 
-    def test_total_includes_dropped(self):
-        packet_stats.inc("zerohop")
-        packet_stats.inc("dropped")
-        packet_stats.inc("dropped")
-        snap = packet_stats.snapshot()
+    def test_total_includes_dropped(self, stats):
+        stats.inc("zerohop")
+        stats.inc("dropped")
+        stats.inc("dropped")
+        snap = stats.snapshot()
         assert snap["total"] == 3

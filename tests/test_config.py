@@ -97,35 +97,23 @@ class TestShouldDrop:
 
 class TestLoadConfigDefaults:
 
-    def test_default_zerohop_enabled_true(self):
-        cfg = load_config(None)
-        assert cfg["zerohop_enabled"] is True
+    @pytest.mark.parametrize("key,expected", [
+        ("zerohop_enabled",     True),
+        ("drop_enabled",        False),
+        ("drop_channels",       INHERIT_ZEROHOP_CHANNELS),
+        ("drop_portnums",       []),
+        ("grpc_port",           9000),
+        ("health_port",         8080),
+        ("log_format",          "text"),
+        ("_drop_portnums_set",  set()),
+    ])
+    def test_default_value(self, key, expected):
+        assert load_config(None)[key] == expected
 
     def test_default_zerohop_channels_eight_presets(self):
         cfg = load_config(None)
         assert len(cfg["zerohop_channels"]) == 8
         assert "LongFast" in cfg["zerohop_channels"]
-
-    def test_default_drop_disabled(self):
-        cfg = load_config(None)
-        assert cfg["drop_enabled"] is False
-
-    def test_default_drop_channels_inherits(self):
-        cfg = load_config(None)
-        assert cfg["drop_channels"] == INHERIT_ZEROHOP_CHANNELS
-
-    def test_default_drop_portnums_empty(self):
-        cfg = load_config(None)
-        assert cfg["drop_portnums"] == []
-
-    def test_default_grpc_port(self):
-        assert load_config(None)["grpc_port"] == 9000
-
-    def test_default_health_port(self):
-        assert load_config(None)["health_port"] == 8080
-
-    def test_default_log_format_is_text(self):
-        assert load_config(None)["log_format"] == "text"
 
     def test_precomputed_zerohop_set_matches_list(self):
         cfg = load_config(None)
@@ -134,9 +122,6 @@ class TestLoadConfigDefaults:
     def test_precomputed_drop_set_inherits_zerohop_set(self):
         cfg = load_config(None)
         assert cfg["_drop_channels_set"] == cfg["_zerohop_channels_set"]
-
-    def test_precomputed_drop_portnums_empty_set(self):
-        assert load_config(None)["_drop_portnums_set"] == set()
 
 
 class TestLoadConfigFromFile:
