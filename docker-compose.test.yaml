@@ -41,6 +41,37 @@ services:
       retries: 12
       start_period: 5s
 
+  meshtasticd:
+    image: ghcr.io/meshtastic/meshtasticd:latest
+    container_name: floodgate-test-meshtasticd
+    networks: [floodgate-test-net]
+    # Append "-s" to the upstream entrypoint to run in SimRadio mode (no LoRa
+    # hardware needed). Matches the firmware project's own CI pattern.
+    command: ["-s"]
+    depends_on:
+      emqx:
+        condition: service_healthy
+      floodgate:
+        condition: service_healthy
+      exhook-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  meshtasticd-init:
+    build:
+      context: tests/integration/meshtasticd
+      dockerfile: Dockerfile.init
+    container_name: floodgate-test-meshtasticd-init
+    networks: [floodgate-test-net]
+    depends_on:
+      meshtasticd:
+        condition: service_started
+    environment:
+      MESHTASTICD_HOST: "meshtasticd"
+      MESHTASTICD_PORT: "4403"
+      EMQX_ADDR:        "emqx:1883"
+    restart: "no"
+
   exhook-init:
     build:
       context: tests/integration/exhook-init
