@@ -259,6 +259,7 @@ def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
             return None, 0, meta
 
         envelope.packet.hop_limit = 0
+        envelope.packet.hop_start = 0
         modified = envelope.SerializeToString()
         logger.debug("zerohop_protobuf: serialized %d bytes", len(modified))
 
