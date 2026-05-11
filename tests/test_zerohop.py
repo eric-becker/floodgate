@@ -156,6 +156,29 @@ class TestZerohopJson:
         assert modified is not None
         assert json.loads(modified)["hop_limit"] == 0
 
+    def test_hop_start_is_zeroed_when_present(self):
+        """hop_start must also be zeroed; otherwise JSON consumers that
+        compute hops-taken from hop_start see a misleading non-zero value
+        (issue #46, JSON parity with the protobuf fix)."""
+        modified, _, _ = zerohop_json(self._payload(hop_limit=3, hop_start=3))
+        assert modified is not None
+        data = json.loads(modified)
+        assert data["hop_limit"] == 0
+        assert data["hop_start"] == 0
+
+    def test_hops_away_is_zeroed_when_present(self):
+        """hops_away must be zeroed in the realistic Meshtastic JSON shape
+        so consumers computing hops-taken = hop_start - hops_away get 0,
+        not the original hop_start (issue #46)."""
+        modified, _, _ = zerohop_json(
+            self._payload_meshtastic(hop_start=5, hops_away=0)
+        )
+        assert modified is not None
+        data = json.loads(modified)
+        assert data["hop_limit"] == 0
+        assert data["hop_start"] == 0
+        assert data["hops_away"] == 0
+
     def test_uses_hops_away_when_no_hop_limit(self):
         modified, old_hop, _ = zerohop_json(self._payload_meshtastic(hop_start=5, hops_away=0))
         assert old_hop == 5   # effective: hop_start(5) - hops_away(0)

@@ -310,7 +310,15 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
     if old_hop == 0:
         return None, 0, meta
 
+    # Zero hop_limit, hop_start, and hops_away together. Setting only
+    # hop_limit makes downstream consumers compute non-zero hops-taken
+    # (hop_start - hop_limit, or hop_start - hops_away) which produces
+    # ghost-hop renderings in traceroute UIs. See issue #46.
     data["hop_limit"] = 0
+    if "hop_start" in data:
+        data["hop_start"] = 0
+    if "hops_away" in data:
+        data["hops_away"] = 0
     return _json.dumps(data).encode(), old_hop, meta
 
 
