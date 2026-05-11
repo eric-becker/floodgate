@@ -1,6 +1,6 @@
 # floodgate
 
-Zero-hop MQTT anti-flood service for self-hosted [EMQX](https://www.emqx.io/) brokers serving [Meshtastic](https://meshtastic.org/) networks. Intercepts MQTT PUBLISH events via [EMQX ExHook](https://www.emqx.io/docs/en/latest/extensions/exhook.html) (gRPC) and sets `MeshPacket.hop_limit=0` in-flight before delivery to subscribers, preventing LoRa rebroadcast floods when gateways downlink MQTT packets.
+Zero-hop MQTT anti-flood service for self-hosted [EMQX](https://www.emqx.io/) brokers serving [Meshtastic](https://meshtastic.org/) networks. Intercepts MQTT PUBLISH events via [EMQX ExHook](https://www.emqx.io/docs/en/latest/extensions/exhook.html) (gRPC) and zeros both `MeshPacket.hop_limit` and `hop_start` in-flight before delivery to subscribers, preventing LoRa rebroadcast floods when gateways downlink MQTT packets.
 
 Tested against EMQX 6.2.0 (ExHook v3 proto, EMQX 5.9.0+).
 
@@ -22,8 +22,10 @@ Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** —
 
 ```
 Before:  hop_limit: 3  hop_start: 3
-After:   hop_limit: 0  hop_start: 3  ← hop_start preserved for observability
+After:   hop_limit: 0  hop_start: 0  ← both zeroed so receivers don't render ghost hops in traceroute
 ```
+
+Original sender values remain visible in floodgate's per-message log records (extracted before modification). Zeroing `hop_start` alongside `hop_limit` prevents receiving firmware from computing `hopsTaken = hop_start - hop_limit > 0` and padding `RouteDiscovery.route[]` with `0xFFFFFFFF` sentinels (rendered as "Meshtastic ffff (ffff)" in client apps).
 
 See [Meshtastic Mesh Algorithm](https://meshtastic.org/docs/overview/mesh-algo/) for details on `hop_limit` and `hop_start`.
 
@@ -127,7 +129,7 @@ See [config.yaml](config.yaml) for a fully annotated example.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `zerohop_enabled` | `true` | Master switch for the zero-hop modifier. |
-| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` zeroed. |
+| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` and `hop_start` zeroed. |
 | `drop_enabled` | `false` | Master switch for the drop filter (deny entirely). |
 | `drop_channels` | `"zerohop_channels"` | Channels on which the drop filter runs. List of channels, the literal string `"zerohop_channels"` to inherit, or `null` for all channels. |
 | `drop_portnums` | `[]` | Meshtastic portnums (proto enum names like `RANGE_TEST_APP`) to drop. |
@@ -319,13 +321,13 @@ MeshPacket {
   to:         0xffffffff
   id:         3827461829
   hop_limit:  0            ← zeroed — gateway will not rebroadcast
-  hop_start:  3            ← preserved for mesh-distance observability
+  hop_start:  0            ← zeroed so receivers don't render ghost hops in traceroute
   channel:    0
   payload:    <encrypted Data protobuf>   (unchanged)
 }
 ```
 
-The JSON topic mirror (`/json/LongFast/!a2e1a8c4`) is zeroed the same way — `hop_limit` is set to `0` in the JSON object.
+The JSON topic mirror (`/json/LongFast/!a2e1a8c4`) is zeroed the same way — `hop_limit`, `hop_start`, and `hops_away` are set to `0` in the JSON object when present.
 
 ## Development
 
