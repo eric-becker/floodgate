@@ -841,6 +841,7 @@ class TestProcessMessageUnmockedProtobuf:
             from_node=from_node,
             channel_name="LongFast",
             hop_limit=3,
+            hop_start=3,
         )
 
         config = _make_config(zerohop_channels=["LongFast"])
@@ -855,6 +856,7 @@ class TestProcessMessageUnmockedProtobuf:
         modified = mqtt_pb2.ServiceEnvelope()
         modified.ParseFromString(result.payload)
         assert modified.packet.hop_limit == 0
+        assert modified.packet.hop_start == 0
         assert modified.packet.id == packet_id
         assert modified.channel_id == "LongFast"
 
