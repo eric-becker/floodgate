@@ -303,3 +303,53 @@ class TestStringListValidation:
         cfg_file.write_text(yaml.dump({"zerohop_channels": "LongFast"}))
         with pytest.raises(ConfigError):
             load_config(str(cfg_file))
+
+
+# ---------------------------------------------------------------------------
+# grpc_max_workers
+# ---------------------------------------------------------------------------
+
+class TestGrpcMaxWorkers:
+    """The gRPC thread pool must be sized against the broker's exhook pool_size.
+
+    EMQX opens `pool_size` concurrent connections (its own default is 8). If
+    floodgate's pool is smaller, calls queue behind busy workers -- invisible
+    until the broker runs `failed_action: deny`, where a call slower than
+    `request_timeout` is a denied publish, i.e. a dropped mesh packet.
+    """
+
+    def _write(self, tmp_path, body):
+        path = tmp_path / "config.yaml"
+        path.write_text(yaml.safe_dump(body))
+        return str(path)
+
+    def test_default_is_at_least_emqx_default_pool_size(self, tmp_path):
+        config = load_config(self._write(tmp_path, {}))
+        # EMQX's exhook pool_size defaults to 8; anything smaller ships a
+        # bottleneck out of the box.
+        assert config["grpc_max_workers"] >= 8
+
+    def test_user_value_overrides_default(self, tmp_path):
+        config = load_config(self._write(tmp_path, {"grpc_max_workers": 32}))
+        assert config["grpc_max_workers"] == 32
+
+    def test_one_worker_is_allowed(self, tmp_path):
+        config = load_config(self._write(tmp_path, {"grpc_max_workers": 1}))
+        assert config["grpc_max_workers"] == 1
+
+    @pytest.mark.parametrize("bad", [0, -1])
+    def test_non_positive_rejected(self, tmp_path, bad):
+        with pytest.raises(ConfigError, match="grpc_max_workers"):
+            load_config(self._write(tmp_path, {"grpc_max_workers": bad}))
+
+    @pytest.mark.parametrize("bad", ["16", 1.5, [16], None])
+    def test_non_int_rejected(self, tmp_path, bad):
+        # A string sails through YAML and only explodes later inside
+        # grpc.server(), long after config load reported success.
+        with pytest.raises(ConfigError, match="grpc_max_workers"):
+            load_config(self._write(tmp_path, {"grpc_max_workers": bad}))
+
+    def test_bool_rejected(self, tmp_path):
+        # bool is a subclass of int, so this needs an explicit guard.
+        with pytest.raises(ConfigError, match="grpc_max_workers"):
+            load_config(self._write(tmp_path, {"grpc_max_workers": True}))

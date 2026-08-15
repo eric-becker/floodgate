@@ -43,6 +43,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
     # Transport / runtime
     "grpc_port":        9000,
+    # Size of the gRPC server's thread pool. EMQX opens `pool_size` concurrent
+    # connections to the ExHook (its own default is 8); if this is smaller,
+    # calls queue behind busy workers. That only shows up as latency until the
+    # broker runs `failed_action: deny`, where a call slower than
+    # `request_timeout` means the message is denied — i.e. a dropped packet.
+    # Match or exceed the broker's exhook pool_size.
+    "grpc_max_workers": 16,
     "health_port":      8080,
     "topic_filter":     "msh/#",
     "stats_interval_s": 60,
@@ -94,6 +101,10 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
     )
     config["_drop_portnums_set"]    = _validate_string_list(
         config.get("drop_portnums"), key="drop_portnums",
+    )
+
+    config["grpc_max_workers"] = _validate_positive_int(
+        config.get("grpc_max_workers"), key="grpc_max_workers",
     )
 
     log_level = config.get("log_level", "INFO").upper()
@@ -172,6 +183,23 @@ def _validate_string_list(value, key: str) -> set[str]:
             f"`{key}` entries must be strings; got non-string entries: {bad!r}"
         )
     return set(value)
+
+
+def _validate_positive_int(value, key: str) -> int:
+    """Coerce a YAML scalar into a positive int; reject anything else.
+
+    `grpc.server(max_workers=...)` raises on 0 or a negative, and a value given
+    as a string would be accepted by YAML but blow up at server construction —
+    long after the config was "loaded". Fail at load time instead.
+    Note bool is a subclass of int, so `grpc_max_workers: true` is rejected too.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(
+            f"`{key}` must be a positive integer; got {value!r} ({type(value).__name__})"
+        )
+    if value < 1:
+        raise ConfigError(f"`{key}` must be >= 1; got {value}")
+    return value
 
 
 def _reject_removed_keys(user_keys: set[str], source: str) -> None:

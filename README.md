@@ -133,6 +133,7 @@ See [config.yaml](config.yaml) for a fully annotated example.
 | `drop_portnums` | `[]` | Meshtastic portnums (proto enum names like `RANGE_TEST_APP`) to drop. |
 | `topic_filter` | `msh/#` | MQTT topic pattern to apply. |
 | `grpc_port` | `9000` | gRPC listen port. |
+| `grpc_max_workers` | `16` | Size of the gRPC server thread pool. Match or exceed the broker's ExHook `pool_size` — see [Sizing the thread pool](#sizing-the-thread-pool). |
 | `health_port` | `8080` | HTTP health check port. `GET /health` returns `{"status":"ok","stats":{...}}`. |
 | `stats_interval_s` | `60` | Stats log interval in seconds. |
 | `stats_log` | `true` | Log periodic stats summaries. Set `false` to disable. |
@@ -191,6 +192,28 @@ EMQX's `failed_action` controls what happens to MQTT messages when floodgate is 
 | `ignore` | Messages delivered at full `hop_limit` | MQTT uninterrupted, mesh floods |
 
 **We recommend `deny`.** Dropped MQTT messages are a brief blind spot for subscribers; uncontrolled mesh flooding is real radio damage affecting every node in range. With `restart: unless-stopped` and `auto_reconnect: 5s`, the gap is typically under 20 seconds.
+
+### Sizing the thread pool
+
+EMQX drives the ExHook with a connection pool (`pool_size`, default `8`). floodgate serves those
+calls from a fixed thread pool of `grpc_max_workers` (default `16`). **If floodgate's pool is
+smaller than the broker's, calls queue behind busy workers.**
+
+Under `failed_action: ignore` that queuing costs only latency. Under **`deny` it costs packets** —
+a call that takes longer than the broker's `request_timeout` is treated as a failure, and the
+publish is denied. The dropped packet looks identical to a floodgate outage, with nothing in
+floodgate's own logs to explain it, because from floodgate's side the call eventually succeeded.
+
+Rules of thumb:
+
+- Keep `grpc_max_workers` **>= the broker's exhook `pool_size`**.
+- Raising it is cheap (idle threads cost almost nothing) — the default of `16` covers EMQX's
+  default of `8` with headroom.
+- It is not a throughput dial. Per-message work (protobuf parse, AES decrypt) is CPU-bound and
+  serialized by the GIL; more workers prevent head-of-line blocking, they do not add parallelism.
+
+The configured value is logged at startup:
+`ExHook gRPC server listening on port 9000  (max_workers=16)`
 
 **Startup ordering:** In Docker Compose, EMQX should `depends_on` floodgate (not the other way around). Floodgate is a gRPC server — it starts first, listens on port 9000, and waits. EMQX connects to it after boot. See [docker-compose.yaml](docker-compose.yaml) for the reference configuration.
 

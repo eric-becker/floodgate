@@ -34,6 +34,14 @@ drop_channels: "zerohop_channels"
 drop_portnums: []
 
 grpc_port: 9000
+
+# Size of the gRPC server thread pool. EMQX opens `pool_size` concurrent
+# connections to the ExHook (EMQX's own default is 8) — set this to match or
+# exceed it, or calls queue behind busy workers. Under `failed_action: deny`
+# that queuing is not just latency: a call slower than the broker's
+# `request_timeout` is a denied publish, i.e. a dropped mesh packet.
+grpc_max_workers: 16
+
 health_port: 8080
 topic_filter: "msh/#"
 stats_interval_s: 60
