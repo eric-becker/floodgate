@@ -223,8 +223,9 @@ def serve(config: dict):
     port           = config.get("grpc_port", 9000)
     health_port    = config.get("health_port", 8080)
     stats_interval = config.get("stats_interval_s", 60)
+    max_workers    = config.get("grpc_max_workers", 16)
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))
     _exhook_pb2_grpc.add_HookProviderServicer_to_server(
         HookProviderServicer(config), server
     )
@@ -239,7 +240,7 @@ def serve(config: dict):
     from .health import start_health_server
     start_health_server(health_port)
 
-    logger.info("ExHook gRPC server listening on port %d", port)
+    logger.info("ExHook gRPC server listening on port %d  (max_workers=%d)", port, max_workers)
     logger.info("Waiting for EMQX to connect and register ExHook...")
     _log_startup_policy(config)
 
