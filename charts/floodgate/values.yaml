@@ -1,0 +1,103 @@
+# Default values for the floodgate chart.
+# Override with `--set key=value` or a custom values file (`-f my-values.yaml`).
+
+image:
+  repository: ghcr.io/eric-becker/floodgate
+  # Defaults to .Chart.appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+# Mirrors src/floodgate/config.py defaults and the project root config.yaml.
+# Rendered verbatim into the ConfigMap; floodgate reads it via FLOODGATE_CONFIG.
+config:
+  zerohop_enabled: true
+  zerohop_channels:
+    - LongTurbo
+    - LongFast
+    - LongModerate
+    - MediumFast
+    - MediumSlow
+    - ShortFast
+    - ShortSlow
+    - ShortTurbo
+  drop_enabled: false
+  drop_channels: "zerohop_channels"
+  drop_portnums: []
+  grpc_port: 9000
+  # Set to match or exceed the broker's ExHook pool_size, or calls queue behind
+  # busy workers. Not a throughput dial — per-message work is GIL-serialised.
+  grpc_max_workers: 16
+  health_port: 8080
+  topic_filter: "msh/#"
+  stats_interval_s: 60
+  log_level: "INFO"
+  log_format: "text"
+  stats_log: true
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# Pod-level security context.
+podSecurityContext: {}
+
+# Container-level security context. The floodgate image runs as nobody (65534).
+containerSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+probes:
+  liveness:
+    initialDelaySeconds: 15
+    periodSeconds: 30
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1   # mutually exclusive with minAvailable
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Extra environment variables for the container.
+extraEnv: []
+#  - name: FLOODGATE_LOG_FORMAT
+#    value: json

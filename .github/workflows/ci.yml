@@ -118,7 +118,8 @@ jobs:
         run: docker compose -f docker-compose.test.yaml down -v --remove-orphans || true
 
   # ---------------------------------------------------------------------------
-  # Manifest validation — verify k8s YAML is valid against the k8s schema
+  # Manifest validation — verify static k8s/ YAML and the rendered Helm chart
+  # are valid against the k8s schema
   # ---------------------------------------------------------------------------
   manifests:
     name: Validate k8s manifests
@@ -132,6 +133,29 @@ jobs:
           curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz \
             | tar xz -C /usr/local/bin kubeconform
 
-      - name: Validate k8s manifests
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Validate static k8s manifests
         run: |
           kubeconform -strict -summary k8s/*.yaml
+
+      - name: Lint Helm chart
+        run: |
+          helm lint charts/floodgate
+
+      - name: Validate rendered chart (defaults)
+        run: |
+          helm template floodgate charts/floodgate \
+            | kubeconform -strict -summary
+
+      - name: Validate rendered chart (PDB enabled, drop enabled, json logs)
+        run: |
+          helm template floodgate charts/floodgate \
+            --set podDisruptionBudget.enabled=true \
+            --set config.drop_enabled=true \
+            --set 'config.drop_portnums={RANGE_TEST_APP}' \
+            --set config.log_format=json \
+            | kubeconform -strict -summary

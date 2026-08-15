@@ -27,6 +27,8 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru �
 | `docker-compose.test.yaml`       | Integration test stack (emqx, floodgate, exhook-init, test-driver) on an isolated bridge network. |
 | `scripts/run-integration.sh`     | Integration harness orchestrator — `--keep` leaves the stack up, `--teardown` removes it. |
 | `tests/integration/`             | Integration test assets: floodgate config, ExHook init container, test-driver image + cases. |
+| `charts/floodgate/`              | Helm chart (supported install path). Values mirror `config.yaml` 1:1; rendered chart is validated in CI. |
+| `k8s/`                           | Static `kubectl apply -f` manifests, deprecated in favour of the chart. |
 
 ## Dev Setup
 
