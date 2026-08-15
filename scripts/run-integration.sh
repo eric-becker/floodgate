@@ -45,6 +45,9 @@ fi
 
 echo "==> Bringing up integration stack"
 docker compose -f "$COMPOSE_FILE" up -d --build
+# test-driver is behind the "driver" profile, so the line above skips it and
+# `run` would silently reuse a stale image from a previous checkout.
+docker compose -f "$COMPOSE_FILE" build test-driver
 
 cleanup_on_error() {
     rc=$?
@@ -75,11 +78,53 @@ for i in $(seq 1 60); do
     [ "$i" -eq 60 ] && { echo "floodgate /health never came up" >&2; exit 1; }
 done
 
-echo "==> Running test-driver"
+echo "==> Running test-driver (steady state)"
 set +e
-docker compose -f "$COMPOSE_FILE" run --rm test-driver
+docker compose -f "$COMPOSE_FILE" run --rm -e CASE_SET=default test-driver
 rc=$?
 set -e
+
+# ---------------------------------------------------------------------------
+# Failure-path pass: what actually happens to mesh traffic when floodgate dies.
+#
+# Stopping floodgate rather than pausing it exercises the harsher path — the
+# gRPC connection breaks outright instead of hanging. Both fail open; stopping
+# is faster and deterministic. --no-deps is required because the test-driver
+# declares depends_on floodgate:service_healthy, which we are deliberately
+# violating.
+# ---------------------------------------------------------------------------
+if [ $rc -eq 0 ]; then
+    echo "==> Stopping floodgate to exercise the hook-failure path"
+    docker compose -f "$COMPOSE_FILE" stop floodgate >/dev/null
+    # Let EMQX notice the gRPC channel is gone before publishing.
+    sleep 3
+
+    set +e
+    docker compose -f "$COMPOSE_FILE" run --rm --no-deps -e CASE_SET=hook-down test-driver
+    rc=$?
+    set -e
+    echo "==> hook-down exit code: $rc"
+
+    echo "==> Restarting floodgate"
+    docker compose -f "$COMPOSE_FILE" start floodgate >/dev/null
+    for i in $(seq 1 60); do
+        if curl -sf --connect-timeout 2 --max-time 5 -o /dev/null "$HEALTH_URL"; then
+            echo "    floodgate /health ready again after ${i}s"; break
+        fi
+        sleep 1
+        [ "$i" -eq 60 ] && { echo "floodgate never came back" >&2; exit 1; }
+    done
+    # EMQX auto_reconnect is 5s; give it a beat to re-establish before asserting.
+    sleep 8
+
+    if [ $rc -eq 0 ]; then
+        set +e
+        docker compose -f "$COMPOSE_FILE" run --rm --no-deps -e CASE_SET=recovery test-driver
+        rc=$?
+        set -e
+        echo "==> recovery exit code: $rc"
+    fi
+fi
 
 echo "==> Test-driver exit code: $rc"
 

@@ -88,7 +88,7 @@ Drop runs **before** zerohop. A packet matched by drop is denied entirely and ne
 | `drop_enabled` | `false` | Master switch for the drop filter. |
 | `drop_channels` | `"zerohop_channels"` | Drop scope. List of channels, the literal string `"zerohop_channels"` to inherit, or `null` for all channels. |
 | `drop_portnums` | `[]` | Meshtastic portnums (proto enum names like `RANGE_TEST_APP`) to drop. Only readable on default-key (`AQ==`) protobuf channels and on JSON channels. |
-| `grpc_max_workers` | `16` | gRPC server thread-pool size. Must be >= the broker's ExHook `pool_size` or calls queue; under `failed_action: deny` a queued call past `request_timeout` becomes a dropped packet. |
+| `grpc_max_workers` | `16` | gRPC server thread-pool size. Must be >= the broker's ExHook `pool_size` or calls queue; a queued call past `request_timeout` is counted failed, and a failed call is **delivered unmodified** — so an undersized pool silently loses zero-hop protection rather than dropping packets. See README "ExHook failure policy". |
 | `log_level` | `INFO` | `INFO` logs per-message outcomes. `DEBUG` adds decode/gRPC internals. |
 | `log_format` | `text` | `text` (default) or `json` for Loki/Grafana. Override with `FLOODGATE_LOG_FORMAT` env var. |
 | `stats_log` | `true` | Log periodic stats summaries. Set `false` to disable. |

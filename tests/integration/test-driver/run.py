@@ -42,6 +42,45 @@ CUSTOM_KEY  = bytes.fromhex("00112233445566778899aabbccddeeff")
 # without making the suite slow.
 SETTLE_SECONDS = 1.0
 
+# A failing hook is slower than a working one: a dead server refuses at once,
+# but a hung one burns the full ExHook request_timeout (5s in this harness)
+# before EMQX gives up and moves on. Wait past that so the assertion isn't
+# racing the broker.
+HOOK_FAILURE_SETTLE_SECONDS = float(os.environ.get("HOOK_FAILURE_SETTLE_SECONDS", "9.0"))
+
+# EMQX REST, used only to read ExHook metrics. These are the harness's own
+# throwaway dashboard defaults, matching tests/integration/exhook-init.
+EMQX_API   = os.environ.get("EMQX_API_URL", "http://emqx:18083")
+EMQX_USER  = os.environ.get("EMQX_USER", "admin")
+EMQX_PASS  = os.environ.get("EMQX_PASS", "public")
+HOOK_NAME  = os.environ.get("HOOK_NAME", "floodgate")
+
+
+def exhook_failed_count() -> int | None:
+    """ExHook `metrics.failed` for our hook, or None if EMQX REST is unreadable.
+
+    This is the *only* place a floodgate outage is visible. floodgate itself is
+    down, so it logs nothing, and the packet is delivered normally — from the
+    subscriber's side nothing looks wrong at all. Monitoring has to watch this
+    counter (or EMQX's `exhook_call_exception` error log) to notice that the
+    anti-flood protection has silently stopped.
+    """
+    try:
+        token = requests.post(
+            f"{EMQX_API}/api/v5/login",
+            json={"username": EMQX_USER, "password": EMQX_PASS},
+            timeout=5,
+        ).json()["token"]
+        body = requests.get(
+            f"{EMQX_API}/api/v5/exhooks/{HOOK_NAME}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        ).json()
+        return int(body["metrics"]["failed"])
+    except Exception as exc:  # noqa: BLE001 — diagnostic only, never fatal
+        print(f"  (exhook metrics unavailable: {type(exc).__name__}: {exc})", flush=True)
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Subscriber capture
@@ -384,18 +423,130 @@ def case_custom_key_passthru(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
+def case_hook_down_fails_open(pub: Publisher, sub: Subscriber) -> Outcome:
+    """floodgate unreachable: the packet is delivered UNMODIFIED, not denied.
+
+    This is the case the deployment docs got backwards, so it is worth stating
+    precisely. The ExHook is registered `failed_action: deny`, which reads like
+    "if floodgate is down, refuse the publish". It does not behave that way for
+    `message.publish`. When the gRPC server is unreachable the call *raises*
+    inside the hook, and `emqx_hooks:safe_execute/2` catches the exception and
+    continues the fold with the original message. `failed_action` is never
+    consulted, because that path handles a call that returned a failure — not
+    one that blew up.
+
+    The operational consequence is the opposite of what "deny" suggests: a
+    floodgate outage does not take the broker down, it silently switches the
+    anti-flood protection off. Packets keep flowing with `hop_limit` intact, so
+    the mesh reverts to full flooding — exactly what floodgate exists to stop —
+    and floodgate logs nothing, because floodgate is not running.
+
+    Asserting delivery alone would pass even if EMQX zeroed the hops some other
+    way, so this asserts the hop fields are *untouched*. That is the difference
+    between "traffic still flows" and "protection is off".
+    """
+    name = "hook-down-fails-open"
+    before = exhook_failed_count()
+    pkt_id = 0x0FF0DEAD
+    body = build_envelope(
+        channel   = "LongFast",          # in zerohop_channels: would be zeroed if floodgate were up
+        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload   = b"hook is down",
+        packet_id = pkt_id,
+        from_node = 0x0BADCAFE,
+        hop_limit = 3,
+        hop_start = 3,
+    )
+    pub.publish(topic_for("LongFast"), body)
+    # The hook has to fail before EMQX moves on. A dead server refuses
+    # immediately, but a *hung* one burns the full request_timeout first.
+    time.sleep(HOOK_FAILURE_SETTLE_SECONDS)
+
+    delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not delivered:
+        return Outcome(name, False,
+                       "packet was NOT delivered — EMQX now fails closed; the "
+                       "blast radius of a floodgate outage has changed")
+    got = delivered[-1].payload
+    if _parse_hop_limit(got) != 3 or _parse_hop_start(got) != 3:
+        return Outcome(name, False,
+                       f"hop fields were modified with floodgate down "
+                       f"(hop_limit={_parse_hop_limit(got)}, hop_start={_parse_hop_start(got)})")
+    if got != body:
+        return Outcome(name, False, "delivered payload differs from what was published")
+
+    after = exhook_failed_count()
+    if after is None or before is None:
+        return Outcome(name, False, "could not read exhook metrics from EMQX REST")
+    if after <= before:
+        return Outcome(name, False,
+                       f"exhook metrics.failed did not increment ({before} -> {after}); "
+                       "the outage would be invisible to monitoring")
+    return Outcome(name)
+
+
+def case_recovery_after_hook_down(pub: Publisher, sub: Subscriber) -> Outcome:
+    """floodgate back up: zero-hopping resumes without re-registering the hook.
+
+    EMQX's `auto_reconnect` is what makes an outage self-healing. If this fails
+    while `hook-down-fails-open` passed, an outage is permanent until someone
+    re-registers the hook by hand — a much worse failure than the outage.
+    """
+    name = "recovery-after-hook-down"
+    pkt_id = 0x0FF0BEEF
+    body = build_envelope(
+        channel   = "LongFast",
+        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload   = b"hook is back",
+        packet_id = pkt_id,
+        from_node = 0x0BADCAFE,
+        hop_limit = 3,
+        hop_start = 3,
+    )
+    pub.publish(topic_for("LongFast"), body)
+    time.sleep(SETTLE_SECONDS)
+
+    delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not delivered:
+        return Outcome(name, False, "packet was not delivered after floodgate recovered")
+    got = delivered[-1].payload
+    if _parse_hop_limit(got) != 0 or _parse_hop_start(got) != 0:
+        return Outcome(name, False,
+                       f"zerohop did not resume (hop_limit={_parse_hop_limit(got)}, "
+                       f"hop_start={_parse_hop_start(got)}); hook did not auto-reconnect")
+    return Outcome(name)
+
+
+CASE_SETS: dict[str, list] = {
+    # Steady state: floodgate healthy for the whole run.
+    "default": [
+        case_zerohop,
+        case_drop,
+        case_passthru,
+        case_noop,
+        case_custom_key_passthru,
+    ],
+    # Run by scripts/run-integration.sh with floodgate deliberately stopped.
+    "hook-down": [case_hook_down_fails_open],
+    # Run after floodgate is started again.
+    "recovery": [case_recovery_after_hook_down],
+}
+
+
 def run_all() -> int:
+    case_set = os.environ.get("CASE_SET", "default")
+    try:
+        cases = CASE_SETS[case_set]
+    except KeyError:
+        print(f"unknown CASE_SET {case_set!r}; expected one of {sorted(CASE_SETS)}",
+              file=sys.stderr, flush=True)
+        return 2
+
     sub = Subscriber(EMQX_HOST, EMQX_PORT)
     sub.start()
     pub = Publisher(EMQX_HOST, EMQX_PORT)
     try:
-        outcomes: list[Outcome] = [
-            case_zerohop(pub, sub),
-            case_drop(pub, sub),
-            case_passthru(pub, sub),
-            case_noop(pub, sub),
-            case_custom_key_passthru(pub, sub),
-        ]
+        outcomes: list[Outcome] = [case(pub, sub) for case in cases]
         for o in outcomes:
             print(o.line(), flush=True)
         failed = [o for o in outcomes if not o.passed]
