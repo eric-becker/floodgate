@@ -243,8 +243,9 @@ class TestZerohopProtobufHopFields:
 
     def test_hop_start_is_zeroed_alongside_hop_limit(self):
         pytest.importorskip("meshtastic")
-        from tests.test_portnum import _build_encrypted_envelope
         from meshtastic import mesh_pb2, mqtt_pb2, portnums_pb2
+
+        from tests.test_portnum import _build_encrypted_envelope
 
         envelope_bytes = _build_encrypted_envelope(
             mesh_pb2, mqtt_pb2,
