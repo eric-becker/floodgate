@@ -192,14 +192,45 @@ drop_portnums:
 
 ### ExHook failure policy
 
-EMQX's `failed_action` controls what happens to MQTT messages when floodgate is unreachable (crash, restart, upgrade):
+EMQX's `failed_action` is documented as controlling what happens to MQTT messages when floodgate
+is unreachable (crash, restart, upgrade). **For `message.publish` it does not do what its name
+suggests — floodgate fails _open_ either way.**
 
-| `failed_action` | Floodgate down | Trade-off |
-|-----------------|----------------|-----------|
-| **`deny`** (recommended) | Messages dropped — not delivered to subscribers | Mesh protected, brief MQTT gap |
-| `ignore` | Messages delivered at full `hop_limit` | MQTT uninterrupted, mesh floods |
+| `failed_action` | Floodgate down | Observed |
+|-----------------|----------------|----------|
+| `deny` | Messages **delivered at full `hop_limit`** | Mesh floods |
+| `ignore` | Messages delivered at full `hop_limit` | Mesh floods |
 
-**We recommend `deny`.** Dropped MQTT messages are a brief blind spot for subscribers; uncontrolled mesh flooding is real radio damage affecting every node in range. With `restart: unless-stopped` and `auto_reconnect: 5s`, the gap is typically under 20 seconds.
+Verified against EMQX 6.2.0 for both failure modes — a stopped server (connection refused) and a
+hung one (call exceeds `request_timeout`). In both, `metrics.failed` incremented and the message
+was still delivered, byte-identical, with `hop_limit` untouched. EMQX's own log shows why:
+
+```
+exhook_call_exception ... failed_action => deny
+  emqx_exhook:call_fold/5 → emqx_exhook_handler:on_message_publish/1 → emqx_hooks:safe_execute/2
+```
+
+An unreachable server makes the gRPC call **raise**. `emqx_hooks:safe_execute/2` catches the
+exception and continues the hook fold with the original message, so `failed_action` is never
+consulted — that setting handles a call that *returned* a failure, not one that blew up.
+
+**What this means operationally.** A floodgate outage will not interrupt your broker, and it will
+not drop packets. It silently switches the anti-flood protection off: traffic keeps flowing at
+full `hop_limit` and the mesh reverts to exactly the flooding floodgate exists to prevent.
+Nothing in floodgate's logs will say so, because floodgate isn't running.
+
+**Monitor `metrics.failed`**, which is the only place the outage is visible:
+
+```bash
+curl -s "$EMQX/api/v5/exhooks/floodgate" -H "Authorization: Bearer $TOKEN" \
+  | jq '{failed: .metrics.failed, status: [.node_status[].status]}'
+```
+
+Alert on it increasing, or on EMQX's `exhook_call_exception` error log. Publisher-side counters
+and subscriber-side delivery both look completely normal during an outage.
+
+Regression-tested by the `hook-down-fails-open` and `recovery-after-hook-down` integration cases,
+so if a future EMQX release starts failing closed, CI will say so.
 
 ### Sizing the thread pool
 
@@ -207,10 +238,14 @@ EMQX drives the ExHook with a connection pool (`pool_size`, default `8`). floodg
 calls from a fixed thread pool of `grpc_max_workers` (default `16`). **If floodgate's pool is
 smaller than the broker's, calls queue behind busy workers.**
 
-Under `failed_action: ignore` that queuing costs only latency. Under **`deny` it costs packets** —
-a call that takes longer than the broker's `request_timeout` is treated as a failure, and the
-publish is denied. The dropped packet looks identical to a floodgate outage, with nothing in
-floodgate's own logs to explain it, because from floodgate's side the call eventually succeeded.
+A call that takes longer than the broker's `request_timeout` is counted as a failure — and per the
+section above, a failed call means the message is **delivered unmodified**, regardless of
+`failed_action`. So an undersized pool doesn't cost you packets; it costs you *protection*, one
+packet at a time, exactly on the busiest channels where queuing is most likely.
+
+That is harder to notice than a drop. The packet arrives, subscribers see it, and floodgate's own
+logs show the call eventually succeeding — while the mesh floods. `metrics.failed` is again the
+signal.
 
 Rules of thumb:
 

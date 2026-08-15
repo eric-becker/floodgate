@@ -55,7 +55,7 @@ The full default set lives in [values.yaml](values.yaml). Highlights:
 | `config.drop_enabled` | `false` | Master switch for the drop filter |
 | `config.drop_channels` | `"zerohop_channels"` | Inherits from zerohop, or a list, or `null` for all channels |
 | `config.drop_portnums` | `[]` | E.g. `[RANGE_TEST_APP]` |
-| `config.grpc_max_workers` | `16` | gRPC thread-pool size. Match or exceed the broker's ExHook `pool_size`, or calls queue; under `failed_action: deny` a queued call past `request_timeout` is a dropped packet |
+| `config.grpc_max_workers` | `16` | gRPC thread-pool size. Match or exceed the broker's ExHook `pool_size`, or calls queue; a call past `request_timeout` counts as failed and is then **delivered unmodified**, silently losing zero-hop protection (not dropped — see README "ExHook failure policy") |
 | `config.log_format` | `"text"` | Set `"json"` for Loki/Grafana |
 | `service.type` | `ClusterIP` | gRPC port only; health is internal |
 | `podDisruptionBudget.enabled` | `false` | Set `true` and tune `minAvailable` for HA topologies |

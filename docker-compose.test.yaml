@@ -71,6 +71,14 @@ services:
       EMQX_HOST: "emqx"
       EMQX_PORT: "1883"
       FLOODGATE_HEALTH_URL: "http://floodgate:8080/health"
+      # Which case set to run. run-integration.sh overrides this to drive the
+      # hook-down / recovery passes; unset means the steady-state cases.
+      CASE_SET: "${CASE_SET:-default}"
+      # Read-only ExHook metrics access — the only place a floodgate outage
+      # is observable, since floodgate is down and the packet flows normally.
+      EMQX_API_URL: "http://emqx:18083"
+      EMQX_USER: "admin"
+      EMQX_PASS: "public"
 
 networks:
   floodgate-test-net:
