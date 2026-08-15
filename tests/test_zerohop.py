@@ -17,6 +17,7 @@ from floodgate.zerohop import (
     parse_meshtastic_topic,
     process_message,
     zerohop_json,
+    zerohop_protobuf,
 )
 
 # Directory of real-world Meshtastic payloads captured from gateways.
@@ -155,6 +156,29 @@ class TestZerohopJson:
         assert modified is not None
         assert json.loads(modified)["hop_limit"] == 0
 
+    def test_hop_start_is_zeroed_when_present(self):
+        """hop_start must also be zeroed; otherwise JSON consumers that
+        compute hops-taken from hop_start see a misleading non-zero value
+        (issue #46, JSON parity with the protobuf fix)."""
+        modified, _, _ = zerohop_json(self._payload(hop_limit=3, hop_start=3))
+        assert modified is not None
+        data = json.loads(modified)
+        assert data["hop_limit"] == 0
+        assert data["hop_start"] == 0
+
+    def test_hops_away_is_zeroed_when_present(self):
+        """hops_away must be zeroed in the realistic Meshtastic JSON shape
+        so consumers computing hops-taken = hop_start - hops_away get 0,
+        not the original hop_start (issue #46)."""
+        modified, _, _ = zerohop_json(
+            self._payload_meshtastic(hop_start=5, hops_away=0)
+        )
+        assert modified is not None
+        data = json.loads(modified)
+        assert data["hop_limit"] == 0
+        assert data["hop_start"] == 0
+        assert data["hops_away"] == 0
+
     def test_uses_hops_away_when_no_hop_limit(self):
         modified, old_hop, _ = zerohop_json(self._payload_meshtastic(hop_start=5, hops_away=0))
         assert old_hop == 5   # effective: hop_start(5) - hops_away(0)
@@ -202,6 +226,56 @@ class TestZerohopJson:
         data = json.loads(modified)
         assert data["type"]    == "text"
         assert data["channel"] == 0
+
+
+# ---------------------------------------------------------------------------
+# zerohop_protobuf — hop field zeroing (issue #46)
+# ---------------------------------------------------------------------------
+
+class TestZerohopProtobufHopFields:
+    """Both hop_limit AND hop_start must be zeroed.
+
+    Setting only hop_limit=0 (with hop_start unchanged) makes Meshtastic
+    firmware compute hopsTaken = hop_start - hop_limit > 0, which then
+    pads RouteDiscovery.route[] with 0xFFFFFFFF sentinels rendered as
+    'Meshtastic ffff (ffff)' in the apps. See issue #46.
+    """
+
+    def test_hop_start_is_zeroed_alongside_hop_limit(self):
+        pytest.importorskip("meshtastic")
+        from meshtastic import mesh_pb2, mqtt_pb2, portnums_pb2
+
+        from tests.test_portnum import _build_encrypted_envelope
+
+        envelope_bytes = _build_encrypted_envelope(
+            mesh_pb2, mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+            payload_bytes=b"x",
+            packet_id=0x11223344,
+            from_node=0xAABBCCDD,
+            channel_name="LongFast",
+            hop_limit=3,
+            hop_start=3,
+        )
+        # Verify test premise: both fields are set to 3 in the input envelope.
+        sanity = mqtt_pb2.ServiceEnvelope()
+        sanity.ParseFromString(envelope_bytes)
+        assert sanity.packet.hop_limit == 3
+        assert sanity.packet.hop_start == 3
+
+        modified_bytes, old_hop, _meta = zerohop_protobuf(envelope_bytes)
+
+        assert old_hop == 3
+        assert modified_bytes is not None
+
+        modified = mqtt_pb2.ServiceEnvelope()
+        modified.ParseFromString(modified_bytes)
+        assert modified.packet.hop_limit == 0
+        assert modified.packet.hop_start == 0, (
+            "hop_start must be zeroed too; otherwise receiving firmware "
+            "computes hopsTaken = hop_start - hop_limit > 0 and pads the "
+            "RouteDiscovery route with 'Meshtastic ffff (ffff)' sentinels"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -768,6 +842,7 @@ class TestProcessMessageUnmockedProtobuf:
             from_node=from_node,
             channel_name="LongFast",
             hop_limit=3,
+            hop_start=3,
         )
 
         config = _make_config(zerohop_channels=["LongFast"])
@@ -782,6 +857,7 @@ class TestProcessMessageUnmockedProtobuf:
         modified = mqtt_pb2.ServiceEnvelope()
         modified.ParseFromString(result.payload)
         assert modified.packet.hop_limit == 0
+        assert modified.packet.hop_start == 0
         assert modified.packet.id == packet_id
         assert modified.channel_id == "LongFast"
 

@@ -91,7 +91,8 @@ def meshtastic_pb2():
 
 def _build_encrypted_envelope(mesh_pb2, mqtt_pb2, portnum, payload_bytes,
                               packet_id=0xAABBCCDD, from_node=0x12345678,
-                              channel_name="LongFast", hop_limit=0):
+                              channel_name="LongFast", hop_limit=0,
+                              hop_start=None):
     """Construct a ServiceEnvelope whose inner MeshPacket has the named
     portnum encrypted under the default Meshtastic key."""
     data = mesh_pb2.Data()
@@ -105,6 +106,8 @@ def _build_encrypted_envelope(mesh_pb2, mqtt_pb2, portnum, payload_bytes,
     setattr(pkt, pkt.DESCRIPTOR.fields_by_name["from"].name, from_node)
     pkt.encrypted = ciphertext
     pkt.hop_limit = hop_limit
+    if hop_start is not None:
+        pkt.hop_start = hop_start
 
     env = mqtt_pb2.ServiceEnvelope()
     env.packet.CopyFrom(pkt)

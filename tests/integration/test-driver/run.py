@@ -189,6 +189,16 @@ def _parse_hop_limit(payload: bytes) -> int | None:
         return None
 
 
+def _parse_hop_start(payload: bytes) -> int | None:
+    """Return MeshPacket.hop_start from a serialized ServiceEnvelope, or None."""
+    try:
+        env = mqtt_pb2.ServiceEnvelope()
+        env.ParseFromString(payload)
+        return env.packet.hop_start if env.HasField("packet") else None
+    except Exception:
+        return None
+
+
 def _packet_id_of(payload: bytes) -> int | None:
     try:
         env = mqtt_pb2.ServiceEnvelope()
@@ -235,6 +245,10 @@ def case_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
     hop = _parse_hop_limit(delivered[-1].payload)
     if hop != 0:
         return Outcome(name, False, f"delivered hop_limit={hop}, expected 0")
+    hop_start = _parse_hop_start(delivered[-1].payload)
+    if hop_start != 0:
+        return Outcome(name, False,
+                       f"delivered hop_start={hop_start}, expected 0 (#46)")
 
     post = health_stats()
     if post.get("zerohop", 0) - pre.get("zerohop", 0) < 1:
