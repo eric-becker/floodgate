@@ -41,6 +41,19 @@ services:
       retries: 12
       start_period: 5s
 
+  # A real Meshtastic firmware build (portduino native, no radio). It is the only
+  # thing in this stack that judges floodgate's output the way a device would.
+  # Pinned by digest: `daily-*` moves, and a moving dependency turns unrelated
+  # PRs red. Bump deliberately.
+  mesh-sim:
+    image: meshtastic/meshtasticd@sha256:25eae60a6fd53c485a34ae968f87da8b1dcf4eb1f502c6227626270291983e98
+    container_name: floodgate-test-mesh-sim
+    networks: [floodgate-test-net]
+    # -s simulated radio; -h fixed hwid (without it the MAC is zero and the node
+    # never gets a device_id); -d persists prefs so config survives the restart
+    # that starts the MQTT client. No -e: erasing would undo that config.
+    command: ["sh", "-c", "meshtasticd -s -h 3735928559 -p 4403 -d /var/lib/meshtasticd"]
+
   exhook-init:
     build:
       context: tests/integration/exhook-init
