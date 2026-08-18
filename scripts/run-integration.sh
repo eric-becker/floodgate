@@ -126,6 +126,44 @@ if [ $rc -eq 0 ]; then
     fi
 fi
 
+# ---------------------------------------------------------------------------
+# Firmware tier: a real meshtasticd node judges floodgate's output.
+#
+# MQTT config only takes effect after a restart (the MQTT client starts at boot),
+# and the node will not connect at all until a channel has uplink/downlink on -
+# wantsLink() in src/mqtt/MQTT.cpp requires channels.anyMqttEnabled().
+# ---------------------------------------------------------------------------
+if [ $rc -eq 0 ]; then
+    echo "==> Configuring mesh-sim node"
+    mesh_cli() { docker compose -f "$COMPOSE_FILE" run --rm --no-deps \
+        --entrypoint meshtastic test-driver --host mesh-sim "$@" >/dev/null 2>&1 || true; }
+
+    mesh_cli --set lora.region US
+    sleep 5
+    mesh_cli --set mqtt.enabled true --set mqtt.address emqx:1883 --set mqtt.root msh \
+             --set mqtt.tls_enabled false --set mqtt.encryption_enabled true
+    sleep 5
+    mesh_cli --ch-index 0 --ch-set uplink_enabled true --ch-set downlink_enabled true
+    sleep 5
+
+    echo "==> Restarting mesh-sim so it connects to MQTT"
+    docker compose -f "$COMPOSE_FILE" restart mesh-sim >/dev/null
+    for i in $(seq 1 60); do
+        if docker compose -f "$COMPOSE_FILE" logs --no-color --tail=200 mesh-sim 2>/dev/null \
+             | grep -q "MQTT connected"; then
+            echo "    mesh-sim connected to the broker after ${i}s"; break
+        fi
+        sleep 1
+        [ "$i" -eq 60 ] && { echo "mesh-sim never connected to MQTT" >&2; exit 1; }
+    done
+
+    set +e
+    docker compose -f "$COMPOSE_FILE" run --rm --no-deps -e CASE_SET=firmware test-driver
+    rc=$?
+    set -e
+    echo "==> firmware exit code: $rc"
+fi
+
 echo "==> Test-driver exit code: $rc"
 
 if [ "$mode" = "run-and-keep" ]; then

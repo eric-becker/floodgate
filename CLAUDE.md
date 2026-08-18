@@ -26,7 +26,7 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru �
 | `proto/emqx/exhook.proto`        | EMQX ExHook interface definition. |
 | `docker-compose.test.yaml`       | Integration test stack (emqx, floodgate, exhook-init, test-driver) on an isolated bridge network. |
 | `scripts/run-integration.sh`     | Integration harness orchestrator — `--keep` leaves the stack up, `--teardown` removes it. |
-| `tests/integration/`             | Integration test assets: floodgate config, ExHook init container, test-driver image + cases. |
+| `tests/integration/`             | Integration test assets: floodgate config, ExHook init container, test-driver image + cases. Four passes: `default`, `hook-down`, `recovery`, `firmware` (a real meshtasticd node, pinned by digest). |
 | `tests/test_roundtrip.py`        | Round-trip fidelity: ciphertext byte-identical, packet still decrypts, only `hop_limit`/`hop_start` change, unknown fields survive. Guards the silent-corruption class field assertions can't see. |
 | `charts/floodgate/`              | Helm chart (supported install path). Values mirror `config.yaml` 1:1; rendered chart is validated in CI. |
 | `k8s/`                           | Static `kubectl apply -f` manifests, deprecated in favour of the chart. |

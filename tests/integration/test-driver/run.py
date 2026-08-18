@@ -25,6 +25,7 @@ from meshtastic import (  # noqa: F401  (portnums re-exported for cases)
     mesh_pb2,
     mqtt_pb2,
     portnums_pb2,
+    telemetry_pb2,
 )
 
 EMQX_HOST           = os.environ.get("EMQX_HOST", "emqx")
@@ -176,11 +177,24 @@ def build_envelope(
     hop_limit: int       = 3,
     hop_start: int       = 3,
     key:       bytes     = DEFAULT_KEY,
+    bitfield:  int | None = 1,
+    want_response: bool = False,
+    channel_hash: int = 0,
 ) -> bytes:
-    """Build a Meshtastic ServiceEnvelope wrapping an encrypted Data message."""
+    """Build a Meshtastic ServiceEnvelope wrapping an encrypted Data message.
+
+    ``bitfield`` defaults to set because firmware >= 2.5.0 always populates it,
+    and its *presence* is what tells a receiver that hop_start==0 means a real
+    zero-hop packet rather than pre-2.3.0 firmware that never filled hop_start
+    in. Omit it (None) only to model an ancient sender - a real node's packet
+    always has it, and without it the receiver drops the packet outright.
+    """
     data = mesh_pb2.Data()
     data.portnum = portnum
     data.payload = payload
+    if bitfield is not None:
+        data.bitfield = bitfield
+    data.want_response = want_response
     encrypted = encrypt(data.SerializeToString(), key=key,
                         packet_id=packet_id, from_node=from_node)
 
@@ -190,6 +204,10 @@ def build_envelope(
     pkt.id        = packet_id
     pkt.hop_limit = hop_limit
     pkt.hop_start = hop_start
+    # Firmware maps an incoming packet to a channel by this hash and rejects it
+    # ("Invalid channel index") when it is 0. floodgate never reads it, so the
+    # ExHook-level cases leave it unset; the firmware tier must set it.
+    pkt.channel = channel_hash
     pkt.encrypted = encrypted
 
     env = mqtt_pb2.ServiceEnvelope()
@@ -217,6 +235,16 @@ def health_stats() -> dict:
 # Envelope inspection helpers (used by every test case to read the delivered
 # bytes back out of the subscriber's capture buffer).
 # ---------------------------------------------------------------------------
+
+def decrypt_payload(packet) -> bytes:
+    """Decrypt a MeshPacket's payload with the default key.
+
+    The nonce is built from packet id + sender, both of which live outside the
+    ciphertext - so this only works if floodgate left them alone.
+    """
+    return encrypt(packet.encrypted, key=DEFAULT_KEY,
+                   packet_id=packet.id, from_node=getattr(packet, "from"))
+
 
 def _parse_hop_limit(payload: bytes) -> int | None:
     """Return MeshPacket.hop_limit from a serialized ServiceEnvelope, or None."""
@@ -517,6 +545,161 @@ def case_recovery_after_hook_down(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
+
+
+
+# ---------------------------------------------------------------------------
+# Firmware tier - a real meshtasticd node judges floodgate's output
+# ---------------------------------------------------------------------------
+
+MESH_SIM_HOST = os.environ.get("MESH_SIM_HOST", "mesh-sim")
+# The node subscribes to <root>/2/e/<channel>/+ - one level, no region segment,
+# so these cases publish on that shape rather than topic_for()'s regional one.
+FW_TOPIC = "msh/2/e/LongFast/!aabbccdd"
+# Channel hash firmware computes for "LongFast" + the default PSK.
+LONGFAST_HASH = 0x08
+BROADCAST = 0xFFFFFFFF
+
+
+def _fw_receive(publish_fn, match_id, wait=10.0):
+    """Publish, then return the packets the node actually surfaced to a client.
+
+    Connecting over TCP is how a phone sees the node, so anything asserted here
+    is something a real client would see.
+    """
+    from meshtastic.tcp_interface import TCPInterface
+    from pubsub import pub
+
+    got, lock = [], threading.Lock()
+
+    def _on(packet, interface):  # noqa: ARG001
+        with lock:
+            got.append(packet)
+
+    pub.subscribe(_on, "meshtastic.receive")
+    iface = TCPInterface(hostname=MESH_SIM_HOST, connectNow=True)
+    try:
+        time.sleep(2)
+        publish_fn()
+        time.sleep(wait)
+        with lock:
+            return [p for p in got if p.get("id") == match_id]
+    finally:
+        pub.unsubscribe(_on, "meshtastic.receive")
+        iface.close()
+
+
+def _node_num() -> int:
+    """Ask the sim node what its node number is.
+
+    Deriving it beats hardcoding: the number falls out of the hwid and erase
+    state, so a pinned constant silently addresses the wrong node and every
+    directed-message case just times out.
+    """
+    from meshtastic.tcp_interface import TCPInterface
+    iface = TCPInterface(hostname=MESH_SIM_HOST, connectNow=True)
+    try:
+        time.sleep(2)
+        return int(iface.myInfo.my_node_num)
+    finally:
+        iface.close()
+
+
+def case_firmware_accepts_zerohopped(pub_: Publisher, sub: Subscriber) -> Outcome:  # noqa: ARG001
+    """Real firmware accepts a zero-hopped packet and shows it to a client.
+
+    This is the assertion no unit test can make. Firmware applies admission
+    rules of its own: `classifyHopStart` treats hop_start==0 as legal only when
+    the decoded Data carries the bitfield that firmware >= 2.5.0 always sets -
+    otherwise the packet is from pre-2.3.0 firmware and is dropped outright,
+    post-decode, before any module or phone sees it.
+
+    So a packet can be structurally perfect, pass all 227 unit tests, and still
+    be silently discarded on arrival. Only a real node can say otherwise.
+
+    Deliberately one portnum: portnum handling is covered at the unit level,
+    and re-testing it here would add setup without adding signal. What is
+    unique to this tier is admission, and that is portnum-independent.
+    """
+    name = "firmware-accepts-zerohopped"
+    pkt_id = 0x7E570001
+    payload = b"floodgate integration"
+    body = build_envelope(
+        channel="LongFast", portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload=payload, packet_id=pkt_id, from_node=0x0BADF00D,
+        hop_limit=3, hop_start=3, channel_hash=LONGFAST_HASH,
+    )
+    got = _fw_receive(lambda: pub_.publish(FW_TOPIC, body), pkt_id)
+    if not got:
+        return Outcome(name, False,
+                       "node never surfaced the packet - firmware dropped what "
+                       "floodgate produced (check hop_start/bitfield admission)")
+    p = got[-1]
+    # hop_limit/hop_start of 0 are proto3 defaults, so they are absent from the
+    # dict entirely. Absent or explicitly 0 both mean zero-hopped.
+    if p.get("hopLimit") not in (None, 0) or p.get("hopStart") not in (None, 0):
+        return Outcome(name, False,
+                       f"hops not zeroed (limit={p.get('hopLimit')} start={p.get('hopStart')})")
+    if p.get("decoded", {}).get("payload") != payload:
+        return Outcome(name, False, "payload did not survive intact")
+    return Outcome(name)
+
+
+def case_firmware_traceroute_no_ghost_hops(pub_: Publisher, sub: Subscriber) -> Outcome:  # noqa: ARG001
+    """The #46 regression, judged by firmware instead of by us.
+
+    `TraceRouteModule::insertUnknownHops` pads the route with NODENUM_BROADCAST
+    - rendered "ffff" by clients - once for every hop that `hop_start -
+    hop_limit` claims but the route does not record. Zeroing hop_limit alone
+    left hop_start intact, so every zero-hopped packet claimed the full hop
+    limit and clients drew that many phantom relays.
+
+    Publishing an ordinary 3-hop packet and letting floodgate do the zeroing is
+    the point: revert to zeroing hop_limit only and this fails with 3 ghosts.
+    """
+    name = "firmware-traceroute-no-ghost-hops"
+    try:
+        node = _node_num()
+    except Exception as exc:  # noqa: BLE001
+        return Outcome(name, False, f"could not read the sim node's number: {exc}")
+
+    pkt_id = 0x7E571000
+    body = build_envelope(
+        channel="LongFast", portnum=portnums_pb2.PortNum.TRACEROUTE_APP,
+        payload=mesh_pb2.RouteDiscovery().SerializeToString(),
+        packet_id=pkt_id, from_node=0x0BADF00D, to_node=node,
+        hop_limit=3, hop_start=3, want_response=True, channel_hash=LONGFAST_HASH,
+    )
+    pub_.publish(FW_TOPIC, body)
+    time.sleep(10)
+
+    routes = []
+    for m in sub.snapshot():
+        env = mqtt_pb2.ServiceEnvelope()
+        try:
+            env.ParseFromString(m.payload)
+            if getattr(env.packet, "from") != node:
+                continue
+            d = mesh_pb2.Data()
+            d.ParseFromString(decrypt_payload(env.packet))
+            if d.portnum != portnums_pb2.PortNum.TRACEROUTE_APP:
+                continue
+            r = mesh_pb2.RouteDiscovery()
+            r.ParseFromString(d.payload)
+            routes.append(list(r.route))
+        except Exception:  # noqa: BLE001 - other traffic on msh/# is expected
+            continue
+
+    if not routes:
+        return Outcome(name, False, f"no traceroute response from node {node:#x}")
+    ghosts = [n for n in routes[-1] if n == BROADCAST]
+    if ghosts:
+        return Outcome(name, False,
+                       f"{len(ghosts)} ghost hop(s) in {routes[-1]} - hop_start is "
+                       "no longer zeroed alongside hop_limit")
+    return Outcome(name)
+
+
 CASE_SETS: dict[str, list] = {
     # Steady state: floodgate healthy for the whole run.
     "default": [
@@ -530,6 +713,9 @@ CASE_SETS: dict[str, list] = {
     "hook-down": [case_hook_down_fails_open],
     # Run after floodgate is started again.
     "recovery": [case_recovery_after_hook_down],
+    # Needs the mesh-sim service; run after it is configured and restarted.
+    "firmware": [case_firmware_accepts_zerohopped,
+                 case_firmware_traceroute_no_ghost_hops],
 }
 
 
