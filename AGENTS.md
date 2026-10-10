@@ -20,7 +20,7 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru �
 |------|------|
 | `src/floodgate/exhook_server.py` | gRPC server; EMQX connects here. Maps process_message actions to ExHook responses. |
 | `src/floodgate/zerohop.py`       | Per-message pipeline: drop check → zerohop check → structured logging. |
-| `src/floodgate/config.py`        | Config loader, schema validation (rejects removed keys), policy helpers `should_zerohop` / `should_drop`. |
+| `src/floodgate/config.py`        | Config loader, schema validation (rejects removed and unknown keys), policy helpers `should_zerohop` / `should_drop`. |
 | `src/floodgate/decrypt.py`       | AES-128-CTR decryption with the Meshtastic default key (drop's portnum lookup needs this for `/e/` packets). |
 | `src/floodgate/portnum.py`       | Portnum extraction from `/e/` (decrypt + Data parse) and `/json/` payloads. |
 | `src/floodgate/log_setup.py`     | Logging formatter; text and JSON (Loki) modes. |
@@ -97,6 +97,7 @@ Drop runs **before** zerohop. A packet matched by drop is denied entirely and ne
 | `stats_log` | `true` | Log periodic stats summaries. Set `false` to disable. |
 
 The pre-rename keys `channel_policy` / `channel_blacklist` / `channel_whitelist` were removed. floodgate refuses to load a config containing any of them and prints the new equivalents.
+Any other key not in the table above is also rejected at startup, so a typo (`zerohop_channel:`) fails loudly instead of silently leaving the default in effect.
 
 ## Documentation and Test Discipline
 

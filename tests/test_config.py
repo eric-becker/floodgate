@@ -1,5 +1,7 @@
 """Tests for configuration loading, schema validation, and policy evaluation."""
 
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -353,3 +355,38 @@ class TestGrpcMaxWorkers:
         # bool is a subclass of int, so this needs an explicit guard.
         with pytest.raises(ConfigError, match="grpc_max_workers"):
             load_config(self._write(tmp_path, {"grpc_max_workers": True}))
+
+
+# ---------------------------------------------------------------------------
+# Unknown-key rejection
+# ---------------------------------------------------------------------------
+
+class TestUnknownKeysRejected:
+    """A misspelled key would otherwise merge in silently and leave the
+    default in effect -- e.g. `zerohop_channel:` keeps the 8 presets."""
+
+    def test_unknown_key_raises(self, tmp_path):
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump({"zerohop_channel": ["LongFast"]}))
+        with pytest.raises(ConfigError) as exc:
+            load_config(str(cfg_file))
+        assert "zerohop_channel" in str(exc.value)
+
+    def test_error_message_lists_all_unknown_keys(self, tmp_path):
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump({"drop_portnum": [], "telemetry": True}))
+        with pytest.raises(ConfigError) as exc:
+            load_config(str(cfg_file))
+        msg = str(exc.value)
+        assert "drop_portnum" in msg
+        assert "telemetry"    in msg
+
+    def test_every_default_key_is_accepted(self, tmp_path):
+        from floodgate.config import DEFAULT_CONFIG
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump(DEFAULT_CONFIG))
+        load_config(str(cfg_file))
+
+    def test_shipped_config_yaml_loads(self):
+        load_config(str(Path(__file__).parent.parent / "config.yaml"))
+

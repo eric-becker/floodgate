@@ -66,7 +66,8 @@ class ConfigError(ValueError):
 def load_config(config_path: str | None = None) -> dict[str, Any]:
     """Load configuration from YAML, merge over defaults, and pre-compute lookup sets.
 
-    Raises ConfigError if the YAML file uses keys removed in this release.
+    Raises ConfigError if the YAML file uses keys removed in this release, or
+    keys floodgate does not recognise.
     """
     config = _deep_copy_dict(DEFAULT_CONFIG)
 
@@ -82,6 +83,7 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
                 user_config = yaml.safe_load(f) or {}
             user_keys = set(user_config.keys())
             _reject_removed_keys(user_keys, source=str(path))
+            _reject_unknown_keys(user_keys, source=str(path))
             _deep_merge(config, user_config)
         else:
             logger.warning("Config file %s not found, using defaults", path)
@@ -211,6 +213,22 @@ def _reject_removed_keys(user_keys: set[str], source: str) -> None:
         f"Removed config key(s) found in {source}:\n"
         + "\n".join(lines)
         + "\nUpdate your config — see README.md `Configuration` for the new schema."
+    )
+
+
+def _reject_unknown_keys(user_keys: set[str], source: str) -> None:
+    """Refuse keys floodgate doesn't know.
+
+    Without this a typo merges in silently and the default stays in effect --
+    `zerohop_channel:` would leave the 8 presets zero-hopped with no warning.
+    """
+    found = sorted(user_keys - DEFAULT_CONFIG.keys())
+    if not found:
+        return
+    known = ", ".join(sorted(DEFAULT_CONFIG))
+    raise ConfigError(
+        f"Config file {source} contains unknown key(s): {', '.join(found)}\n"
+        f"Known keys: {known}"
     )
 
 
