@@ -203,7 +203,9 @@ drop_portnums:
 - an explicit list of channel names, e.g. `["LongFast", "MediumFast"]`,
 - `null` (or an empty list) to apply on all channels.
 
-> **Encryption constraint.** `drop_portnums` only acts on packets whose portnum floodgate can read. For protobuf (`/e/`) topics that means channels using the default Meshtastic encryption key (`AQ==`). floodgate decrypts every `/e/` packet in scope with that key; on a custom-keyed channel the result is garbage, which almost always fails to parse and is delivered. Rarely, garbage can parse as a valid `Data` message with a matching portnum and be dropped by mistake — so keep `drop_channels` scoped to default-key channels rather than `null`. JSON (`/json/`) topics expose the portnum directly and have no such limitation.
+> **Encryption constraint.** `drop_portnums` only acts on packets whose portnum floodgate can read. For protobuf (`/e/`) topics that means channels using the default Meshtastic encryption key (`AQ==`). floodgate decrypts every `/e/` packet in scope with that key; on a custom-keyed channel the result is garbage, which almost always fails to parse and is delivered. Rarely, garbage can parse as a valid `Data` message with a matching portnum and be dropped by mistake — so keep `drop_channels` scoped to default-key channels rather than `null`.
+
+> **JSON topics.** Firmware labels only some packet types in its JSON output. Range test (and most other portnums) is published with `"type": ""` — checked in firmware 2.6.11 and 2.7.11 — so floodgate cannot identify it and delivers it. Firmware 2.8 stopped publishing JSON altogether. Gateways downlink only the protobuf (`/e/`) topic, so this never reaches RF; it only affects JSON consumers.
 
 > **Publisher behavior.** When floodgate denies a publish, EMQX still sends a normal PUBACK to the publisher — there's no protocol-level signal back to the gateway that its message was filtered. This is a property of the EMQX ExHook deny mechanism, not floodgate. Operators monitoring publisher-side success counters won't see drops; the floodgate `dropped` counter and per-message log lines are the source of truth.
 
