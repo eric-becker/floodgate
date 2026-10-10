@@ -254,8 +254,10 @@ def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
         pkt = envelope.packet
         old_hop = pkt.hop_limit
         logger.debug("zerohop_protobuf: old_hop=%d", old_hop)
+        # Extract before zeroing: `pkt` aliases envelope.packet, so reading it
+        # afterwards would log hop_start=0 instead of the sender's value.
+        meta = _extract_proto_meta(pkt)
         if old_hop == 0:
-            meta = _extract_proto_meta(pkt)
             return None, 0, meta
 
         envelope.packet.hop_limit = 0
@@ -268,7 +270,6 @@ def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
                        len(payload), type(exc).__name__, exc)
         return None, None, {}
 
-    meta = _extract_proto_meta(pkt)
     return modified, old_hop, meta
 
 

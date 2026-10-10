@@ -872,6 +872,9 @@ class TestProcessMessageUnmockedProtobuf:
         outcome_records = [r for r in caplog.records if hasattr(r, "outcome")]
         assert len(outcome_records) == 1
         assert getattr(outcome_records[0], "outcome") == "zerohop"
+        # The log record carries the sender's ORIGINAL hop_start, not the
+        # zeroed value written to the wire -- it's the only place it survives.
+        assert getattr(outcome_records[0], "hop_start") == 3
 
 
 # ---------------------------------------------------------------------------

@@ -149,6 +149,8 @@ See [config.yaml](config.yaml) for a fully annotated example.
 | `log_format` | `text` | `text` for human-readable output, `json` for Loki/Grafana structured logging. Can also be set via `FLOODGATE_LOG_FORMAT` env var. |
 
 > **Migrating from a pre-rename config?** The keys `channel_policy`, `channel_blacklist`, and `channel_whitelist` were removed. floodgate now refuses to start if they appear in `config.yaml` and prints the new equivalents. Update your config and restart.
+>
+> **Unknown keys are rejected too** (since 0.5.0). A misspelled key such as `zerohop_channel:` used to merge in silently and leave the default in effect; floodgate now refuses to start and lists the keys it does recognise.
 
 ### Zerohop
 
