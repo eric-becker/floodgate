@@ -82,8 +82,7 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
             with open(path) as f:
                 user_config = yaml.safe_load(f) or {}
             user_keys = set(user_config.keys())
-            _reject_removed_keys(user_keys, source=str(path))
-            _reject_unknown_keys(user_keys, source=str(path))
+            _reject_bad_keys(user_keys, source=str(path))
             _deep_merge(config, user_config)
         else:
             logger.warning("Config file %s not found, using defaults", path)
@@ -204,32 +203,31 @@ def _validate_positive_int(value, key: str) -> int:
     return value
 
 
-def _reject_removed_keys(user_keys: set[str], source: str) -> None:
-    found = sorted(user_keys & _REMOVED_KEYS.keys())
-    if not found:
-        return
-    lines = [f"  - {k}: {_REMOVED_KEYS[k]}" for k in found]
-    raise ConfigError(
-        f"Removed config key(s) found in {source}:\n"
-        + "\n".join(lines)
-        + "\nUpdate your config — see README.md `Configuration` for the new schema."
-    )
+def _reject_bad_keys(user_keys: set[str], source: str) -> None:
+    """Refuse removed and unknown keys, reporting both in one error.
 
-
-def _reject_unknown_keys(user_keys: set[str], source: str) -> None:
-    """Refuse keys floodgate doesn't know.
-
-    Without this a typo merges in silently and the default stays in effect --
-    `zerohop_channel:` would leave the 8 presets zero-hopped with no warning.
+    Unknown keys are refused because a typo would otherwise merge in silently
+    and leave the default in effect -- `zerohop_channel:` would leave the 8
+    presets zero-hopped with no warning.
     """
-    found = sorted(user_keys - DEFAULT_CONFIG.keys())
-    if not found:
+    removed = sorted(user_keys & _REMOVED_KEYS.keys())
+    unknown = sorted(user_keys - DEFAULT_CONFIG.keys() - _REMOVED_KEYS.keys())
+    if not removed and not unknown:
         return
-    known = ", ".join(sorted(DEFAULT_CONFIG))
-    raise ConfigError(
-        f"Config file {source} contains unknown key(s): {', '.join(found)}\n"
-        f"Known keys: {known}"
-    )
+    parts = []
+    if removed:
+        lines = [f"  - {k}: {_REMOVED_KEYS[k]}" for k in removed]
+        parts.append(
+            f"Removed config key(s) found in {source}:\n"
+            + "\n".join(lines)
+            + "\nUpdate your config — see README.md `Configuration` for the new schema."
+        )
+    if unknown:
+        parts.append(
+            f"Config file {source} contains unknown key(s): {', '.join(unknown)}\n"
+            f"Known keys: {', '.join(sorted(DEFAULT_CONFIG))}"
+        )
+    raise ConfigError("\n".join(parts))
 
 
 def _deep_copy_dict(d: dict) -> dict:

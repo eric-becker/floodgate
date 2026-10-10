@@ -390,3 +390,13 @@ class TestUnknownKeysRejected:
     def test_shipped_config_yaml_loads(self):
         load_config(str(Path(__file__).parent.parent / "config.yaml"))
 
+
+    def test_removed_and_unknown_keys_reported_together(self, tmp_path):
+        """One error covers both, so fixing a config doesn't take two restarts."""
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump({"channel_policy": "blacklist", "drop_portnum": []}))
+        with pytest.raises(ConfigError) as exc:
+            load_config(str(cfg_file))
+        msg = str(exc.value)
+        assert "channel_policy" in msg
+        assert "drop_portnum"   in msg

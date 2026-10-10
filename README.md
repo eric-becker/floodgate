@@ -86,7 +86,8 @@ curl -X POST http://localhost:18083/api/v5/exhooks \
 If floodgate is on the same Docker network as EMQX, use the container name instead of an IP:
 `"url": "http://floodgate:9000"`
 
-See [ExHook failure policy](#exhook-failure-policy) for why `deny` is recommended.
+See [ExHook failure policy](#exhook-failure-policy): for `message.publish`, `deny` and `ignore` behave
+identically — floodgate fails open either way.
 
 Verify registration in the EMQX dashboard under **Management → ExHook** or:
 
@@ -230,6 +231,15 @@ curl -s "$EMQX/api/v5/exhooks/floodgate" -H "Authorization: Bearer $TOKEN" \
 
 Alert on it increasing, or on EMQX's `exhook_call_exception` error log. Publisher-side counters
 and subscriber-side delivery both look completely normal during an outage.
+
+**A config error is an outage too.** floodgate refuses to start on a removed or unknown config key,
+and a floodgate that won't start is exactly the fail-open case above — protection off, broker
+healthy. The Helm chart contains this: the config checksum rolls a new pod, `maxUnavailable: 0`
+keeps the old one serving until the new one is Ready, and a crash-looping replacement never
+becomes Ready. **Docker Compose has no such guard**, and the static `k8s/` manifests are worse:
+nothing rolls the pod on a ConfigMap edit, so a bad config sits unnoticed until the next unrelated
+restart takes floodgate down. Edit the config, restart, and wait for `ExHook connected: EMQX ...` in the logs before walking away — that
+line means EMQX is calling floodgate, not just that the process started.
 
 Regression-tested by the `hook-down-fails-open` and `recovery-after-hook-down` integration cases,
 so if a future EMQX release starts failing closed, CI will say so.
