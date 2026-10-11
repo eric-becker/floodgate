@@ -12,7 +12,6 @@ requires-python = ">=3.11"
 dependencies = [
     "grpcio>=1.80.0",
     "protobuf>=4.25.0",
-    "paho-mqtt>=2.0.0",
     "pyyaml>=6.0",
     "python-json-logger>=2.0",
     "cryptography>=42",
@@ -23,7 +22,7 @@ dev = [
     "grpcio-tools>=1.80.0",
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "ruff>=0.4",
+    "ruff==0.17.0",   # pinned: CI runs exactly this version, so lint is reproducible
 ]
 
 [project.scripts]
@@ -41,6 +40,10 @@ cache-dir = "/tmp/ruff_cache_floodgate"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+# Without this, import sorting depends on the working directory ruff runs from.
+known-first-party = ["floodgate", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

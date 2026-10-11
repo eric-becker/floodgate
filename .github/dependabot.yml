@@ -1,0 +1,22 @@
+# Pinned versions only stay safe if someone bumps them; Dependabot opens the
+# PRs and CI decides. The protobufs commit in scripts/download_protobufs.sh is
+# not covered and is bumped by hand.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      grpc:
+        patterns: ["grpcio", "grpcio-tools", "protobuf"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

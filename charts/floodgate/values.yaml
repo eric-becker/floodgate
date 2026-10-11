@@ -73,6 +73,9 @@ containerSecurityContext:
   capabilities:
     drop:
       - ALL
+  # Required by the Pod Security "restricted" level.
+  seccompProfile:
+    type: RuntimeDefault
 
 probes:
   liveness:
@@ -88,10 +91,14 @@ updateStrategy:
     maxUnavailable: 0
     maxSurge: 1
 
+# With replicaCount: 1, `minAvailable: 1` blocks every voluntary eviction, so a
+# node drain hangs until you delete the pod. Enable this with replicaCount >= 2.
 podDisruptionBudget:
   enabled: false
   minAvailable: 1
-  # maxUnavailable: 1   # mutually exclusive with minAvailable
+  # To use maxUnavailable instead, set `minAvailable: null` -- the template
+  # prefers minAvailable whenever it is set.
+  # maxUnavailable: 1
 
 nodeSelector: {}
 tolerations: []
