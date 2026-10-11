@@ -1,6 +1,6 @@
 # Static manifests (deprecated)
 
-These flat manifests are kept for users who deploy with `kubectl apply -f k8s/` and don't want to introduce Helm. They are scheduled to be removed in a future release in favour of the [Helm chart](../charts/floodgate/), which is now the supported install path.
+These flat manifests are kept for users who deploy with `kubectl apply -f k8s/` and don't want to introduce Helm. They are scheduled to be removed in a future release in favor of the [Helm chart](../charts/floodgate/), which is now the supported install path.
 
 If you're starting fresh, use the chart instead:
 

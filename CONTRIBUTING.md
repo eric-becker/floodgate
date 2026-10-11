@@ -55,9 +55,9 @@ ruff format --check .      # `ruff format .` to fix
 
 ### Integration testing
 
-The integration harness (`scripts/run-integration.sh`) brings up a full Docker Compose stack — EMQX + floodgate + an ExHook auto-registration container + a Python test-driver — on an isolated bridge network and runs end-to-end checks for `drop`, `zerohop`, `passthru`, `noop`, and `custom-key channel passthru`. The test-driver crafts real Meshtastic `ServiceEnvelope` protobufs (using the same `meshtastic` Python library the firmware uses internally), so each case exercises the exact wire format floodgate sees in production.
+The integration harness (`scripts/run-integration.sh`) brings up a full Docker Compose stack — EMQX, floodgate, an ExHook registration container, a real `meshtasticd` node (`mesh-sim`) and a Python test-driver — on an isolated bridge network, and runs four passes: `default` (zerohop, drop, passthru, noop, custom-key-not-dropped, json-zerohop), `hook-down` (floodgate stopped: fails open), `recovery`, and `firmware` (the real node accepts zero-hopped packets; traceroute has no ghost hops). The test-driver builds `ServiceEnvelope`s with the `meshtastic` Python package's generated protobufs — the same schema as firmware — so each case exercises the wire format floodgate sees in production. See [tests/integration/README.md](tests/integration/README.md) for what each pass proves.
 
-Each case verifies BOTH what the subscriber received (delivered MQTT bytes) AND floodgate's `/health` stats — a behavior change with no stat increment, or a stat increment with no delivery effect, both fail the case. One PASS or FAIL line is printed per case.
+The `default` cases check both what the subscriber received and floodgate's `/health` deltas; `hook-down` checks EMQX's ExHook `metrics.failed`, `recovery` checks delivered hop fields, and `firmware` checks what the node accepted. One PASS or FAIL line is printed per case.
 
 Requirements: `docker` and `bash`. The `pytest` suite never runs the harness — it's opt-in via the script.
 

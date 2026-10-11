@@ -1,4 +1,4 @@
-Floodgate is installed.
+floodgate is installed.
 
   Release:   {{ .Release.Name }}
   Namespace: {{ .Release.Namespace }}
@@ -8,15 +8,21 @@ The gRPC ExHook endpoint is available cluster-internally at:
 
   http://{{ include "floodgate.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.config.grpc_port }}
 
-Register it on your EMQX broker:
+Register it on your EMQX broker (log in for a token first; EMQX's /api/v5 does
+not accept dashboard credentials as basic auth):
 
-  curl -u admin:public -X POST http://<emqx-host>:18083/api/v5/exhooks \
+  EMQX=http://<emqx-host>:18083
+  TOKEN=$(curl -s -X POST "$EMQX/api/v5/login" -H 'Content-Type: application/json' \
+    -d '{"username":"admin","password":"<dashboard password>"}' | jq -r .token)
+  curl -s -X POST "$EMQX/api/v5/exhooks" -H "Authorization: Bearer $TOKEN" \
     -H 'Content-Type: application/json' \
-    -d '{
-      "name": "floodgate",
-      "url":  "http://{{ include "floodgate.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.config.grpc_port }}",
-      "enable": true
-    }'
+    -d '{"name": "floodgate", "auto_reconnect": "5s", "failed_action": "ignore", "enable": true,
+         "url": "http://{{ include "floodgate.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.config.grpc_port }}"}'
+
+Then confirm EMQX is calling it (expect every node "connected"):
+
+  curl -s "$EMQX/api/v5/exhooks/floodgate" -H "Authorization: Bearer $TOKEN" \
+    | jq '[.node_status[].status]'
 
 Tail floodgate logs:
 

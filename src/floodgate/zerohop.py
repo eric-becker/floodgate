@@ -374,8 +374,10 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
 def process_message(topic: str, payload: bytes, config: dict) -> ProcessResult:
     """Process one MQTT message; return a ProcessResult describing the action.
 
-    Outcomes logged at INFO: zerohop, passthru, noop, dropped, warn.
-    Non-packet topics are silently skipped (counted in stats only).
+    Outcomes zerohop, passthru, noop and dropped are logged at INFO; warn (a
+    payload on a zero-hop channel that failed to parse) at WARNING. Non-packet
+    topics are silently skipped (counted in stats only). Any unexpected
+    exception is logged, counted as an error, and the message passes through.
     """
     try:
         return _process_message_inner(topic, payload, config)

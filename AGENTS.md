@@ -5,10 +5,10 @@
 
 MQTT anti-flood service for Meshtastic with two operations:
 
-- **Zerohop** — modify `MeshPacket.hop_limit` to 0 in-flight, then deliver. Default behaviour for the standard public channel presets.
-- **Drop** — deny a publish entirely so EMQX never delivers it. Off by default; intended for portnum-based spam (e.g. `RANGE_TEST_APP` on the public channels).
+- **Zero-hop** — set `MeshPacket.hop_limit` and `hop_start` to 0 in-flight, then deliver. Default for the standard public channel presets. A downlinking gateway shows the packet but never retransmits it on RF; private channels pass through untouched so they keep bridging MQTT and RF.
+- **Drop** — deny a publish entirely so EMQX never delivers it. Off by default; intended for portnum-based spam (e.g. `RANGE_TEST_APP` on the public channels, which only pre-2.8 firmware emits).
 
-Drop runs *before* zerohop. Both are evaluated per message via the EMQX ExHook gRPC interface.
+Drop runs *before* zero-hop. Both are evaluated per message via the EMQX ExHook gRPC interface.
 
 ## Architecture
 
@@ -27,12 +27,12 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru �
 | `src/floodgate/health.py`        | HTTP health check server on `health_port`. |
 | `src/floodgate/__main__.py`      | CLI entry point. |
 | `proto/emqx/exhook.proto`        | EMQX ExHook interface definition. |
-| `docker-compose.test.yaml`       | Integration test stack (emqx, floodgate, exhook-init, test-driver) on an isolated bridge network. |
+| `docker-compose.test.yaml`       | Integration test stack (emqx, floodgate, exhook-init, mesh-sim, test-driver) on an isolated bridge network; host ports on loopback only. |
 | `scripts/run-integration.sh`     | Integration harness orchestrator — `--keep` leaves the stack up, `--teardown` removes it. |
 | `tests/integration/`             | Integration test assets: floodgate config, ExHook init container, test-driver image + cases. Four passes: `default`, `hook-down`, `recovery`, `firmware` (a real meshtasticd node, pinned by digest). |
 | `tests/test_roundtrip.py`        | Round-trip fidelity: ciphertext byte-identical, packet still decrypts, only `hop_limit`/`hop_start` change, unknown fields survive. Guards the silent-corruption class field assertions can't see. |
 | `charts/floodgate/`              | Helm chart (supported install path). Values mirror `config.yaml` 1:1; rendered chart is validated in CI. |
-| `k8s/`                           | Static `kubectl apply -f` manifests, deprecated in favour of the chart. |
+| `k8s/`                           | Static `kubectl apply -f` manifests, deprecated in favor of the chart. |
 | `.github/workflows/ci.yml`       | The only workflow: version, lint, test, smoke, integration, manifests, then image push and GitHub release (push/tag only, after everything passes). |
 | `scripts/check_version.sh`       | Fails unless pyproject, `__version__`, chart `appVersion`, the `k8s/` image tag (and the tag, when given) agree. |
 | `scripts/check_chart.py`         | Loads a rendered chart's ConfigMap with `load_config` and checks the rollout settings that contain a bad config. |
@@ -43,9 +43,9 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru �
 ```bash
 git clone https://github.com/eric-becker/floodgate
 cd floodgate
-./scripts/download_protobufs.sh   # Meshtastic protobufs → protobufs/
+pip install -e ".[dev]"           # first: grpc_tools is needed to generate stubs
+./scripts/download_protobufs.sh   # Meshtastic protobufs at the pinned commit → protobufs/
 ./scripts/generate_protos.sh      # Python stubs → generated/
-pip install -e ".[dev]"
 pytest tests/ --ignore=tests/test_container_smoke.py -q   # no Docker required
 pytest tests/ -q   # full suite including container smoke test (requires Docker)
 ./scripts/run-integration.sh   # full Docker Compose end-to-end test (requires Docker)
@@ -56,14 +56,16 @@ without Meshtastic protobufs (handy for fast iteration). Tests that exercise
 real protobuf payloads (under `tests/payloads/protobuf/`, plus the decrypt
 and portnum tests that build synthetic envelopes) skip automatically via
 `pytest.importorskip("meshtastic")` when the generated stubs aren't present.
-CI generates the stubs before running tests, so the full suite runs there.
+CI generates the stubs and sets `FLOODGATE_NO_SKIPS=1`, so any skip fails CI.
 
 ## Running
 
 ```bash
-floodgate --config config.yaml
-floodgate --config config.yaml -v   # verbose DEBUG logging (decode steps, gRPC calls)
+PYTHONPATH=.:generated floodgate --config config.yaml
+PYTHONPATH=.:generated floodgate --config config.yaml -v   # verbose DEBUG logging (decode steps, gRPC calls)
 ```
+
+The generated stubs are not packaged, so `PYTHONPATH` must include the repo root and `generated/` (the image sets it itself).
 
 Per-message outcomes (`[ZEROHOP]`, `[PASSTHRU]`, `[NOOP]`, `[DROPPED]`) are logged at **INFO** level. No
 special flag needed to see them. `-v` enables DEBUG for internal decode and gRPC detail.
@@ -73,7 +75,7 @@ Or with Docker Compose (includes EMQX):
 docker compose up --build
 ```
 
-After startup, register the ExHook in EMQX (see README Deployment section for the curl commands).
+After startup, register the ExHook in EMQX (README, "Registering the ExHook").
 
 ## Branching & Release Strategy
 
@@ -92,13 +94,13 @@ Drop runs **before** zerohop. A packet matched by drop is denied entirely and ne
 | Key | Default | Effect |
 |-----|---------|--------|
 | `zerohop_enabled` | `true` | Master switch for the zero-hop modifier. |
-| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` zeroed. |
+| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` and `hop_start` zeroed. |
 | `drop_enabled` | `false` | Master switch for the drop filter. |
 | `drop_channels` | `"zerohop_channels"` | Drop scope. List of channels, the literal string `"zerohop_channels"` to inherit, or `null` for all channels. |
-| `drop_portnums` | `[]` | Meshtastic portnums (proto enum names like `RANGE_TEST_APP`) to drop. Only readable on default-key (`AQ==`) protobuf channels and on JSON channels. |
+| `drop_portnums` | `[]` | Exact Meshtastic `PortNum` names (like `RANGE_TEST_APP`) to drop; unknown names are rejected. Readable only on default-key (`AQ==`) protobuf channels and for the few JSON types firmware labels (range test is not one). A custom-keyed packet can, rarely, decrypt into a matching portnum, so keep `drop_channels` scoped. |
 | `grpc_max_workers` | `16` | gRPC server thread-pool size. Must be >= the broker's ExHook `pool_size` or calls queue; a queued call past `request_timeout` is counted failed, and a failed call is **delivered unmodified** — so an undersized pool silently loses zero-hop protection rather than dropping packets. See README "ExHook failure policy". |
 | `log_level` | `INFO` | `INFO` logs per-message outcomes. `DEBUG` adds decode/gRPC internals. |
-| `log_format` | `text` | `text` (default) or `json` for Loki/Grafana. Override with `FLOODGATE_LOG_FORMAT` env var. |
+| `log_format` | `text` | `text` (default) or `json` for Loki/Grafana; JSON timestamps are UTC. Override with `FLOODGATE_LOG_FORMAT` env var. |
 | `stats_log` | `true` | Log periodic stats summaries. Set `false` to disable. |
 
 The pre-rename keys `channel_policy` / `channel_blacklist` / `channel_whitelist` were removed. floodgate refuses to load a config containing any of them and prints the new equivalents.
@@ -108,10 +110,10 @@ Any key not in `DEFAULT_CONFIG` (`src/floodgate/config.py`) is also rejected at 
 
 When making code changes, **always update in the same PR**:
 
-- `README.md` — any changed behaviour, config options, log output examples, or CLI flags
+- `README.md` — any changed behavior, config options, log output examples, or CLI flags
 - `AGENTS.md` — file table, config table, and running instructions (`CLAUDE.md` is a symlink to it)
 - `config.yaml` — if new config keys are added
-- `tests/` — add or update tests for changed behaviour before the PR is created
+- `tests/` — add or update tests for changed behavior before the PR is created
 - `CONTRIBUTING.md` — if CI jobs, test tiers, or branch strategy changes
 
 Do not open a PR until README and tests reflect the code changes being merged.
