@@ -2,9 +2,10 @@
 
 import argparse
 import logging
+import sys
 
 from . import __version__
-from .config import load_config
+from .config import ConfigError, load_config
 
 
 def main():
@@ -44,13 +45,18 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    config = load_config(args.config)
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        # A config problem is the operator's to fix; a traceback adds nothing.
+        logging.getLogger("floodgate").error("Configuration error: %s", exc)
+        sys.exit(2)
 
     if args.verbose:
         config["log_level"] = "DEBUG"
 
-    log_level = getattr(logging, config.get("log_level", "INFO").upper(), logging.INFO)
-    log_format = config.get("log_format", "text")
+    log_level = getattr(logging, config["log_level"])
+    log_format = config["log_format"]
 
     # Install real handler (potentially JSON), replacing the bootstrap handler
     from .log_setup import configure_logging

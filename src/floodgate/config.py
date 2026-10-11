@@ -1,5 +1,6 @@
 """Configuration loader, schema validation, and policy evaluation."""
 
+import difflib
 import logging
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 # identical lists when they want both filters scoped the same way.
 INHERIT_ZEROHOP_CHANNELS = "zerohop_channels"
 
-# Removed in this release; keys present in user YAML trigger ConfigError.
+# Removed in 0.3.0; keys present in user YAML trigger ConfigError.
 _REMOVED_KEYS = {
     "channel_policy":    "Replaced by `zerohop_enabled` (bool) and `zerohop_channels` (list).",
     "channel_blacklist": "Renamed to `zerohop_channels`.",
@@ -23,7 +24,7 @@ _REMOVED_KEYS = {
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    # Zerohop: modify hop_limit to 0 and deliver. Existing behavior, new names.
+    # Zerohop: set hop_limit and hop_start to 0, then deliver.
     "zerohop_enabled": True,
     "zerohop_channels": [
         "LongTurbo",
@@ -45,9 +46,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "grpc_port":        9000,
     # Size of the gRPC server's thread pool. EMQX opens `pool_size` concurrent
     # connections to the ExHook (its own default is 8); if this is smaller,
-    # calls queue behind busy workers. That only shows up as latency until the
-    # broker runs `failed_action: deny`, where a call slower than
-    # `request_timeout` means the message is denied — i.e. a dropped packet.
+    # calls queue behind busy workers. A call slower than the broker's
+    # `request_timeout` counts as failed, and EMQX then delivers the message
+    # unmodified whatever `failed_action` says -- an undersized pool silently
+    # loses zero-hop protection rather than dropping packets.
     # Match or exceed the broker's exhook pool_size.
     "grpc_max_workers": 16,
     "health_port":      8080,
@@ -58,60 +60,146 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "stats_log":        True,
 }
 
+_LOG_LEVELS  = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+_LOG_FORMATS = ("text", "json")
+
 
 class ConfigError(ValueError):
     """Raised at config-load time for unrecoverable schema problems."""
 
 
 def load_config(config_path: str | None = None) -> dict[str, Any]:
-    """Load configuration from YAML, merge over defaults, and pre-compute lookup sets.
+    """Load configuration from YAML over the defaults, validate it, and
+    pre-compute lookup sets.
 
-    Raises ConfigError if the YAML file uses keys removed in this release, or
-    keys floodgate does not recognise.
+    `config_path` falls back to $FLOODGATE_CONFIG; with neither set, the
+    built-in defaults are used. Raises ConfigError if a named file is missing
+    or is not a mapping, if it uses removed or unknown keys, or if any value
+    has the wrong type or range. Value problems are reported together.
     """
-    config = _deep_copy_dict(DEFAULT_CONFIG)
+    config = {k: list(v) if isinstance(v, list) else v for k, v in DEFAULT_CONFIG.items()}
 
     if config_path is None:
         config_path = os.environ.get("FLOODGATE_CONFIG")
 
-    user_keys: set[str] = set()
+    source = "built-in defaults"
     if config_path:
         path = Path(config_path)
-        if path.exists():
-            logger.info("Loading config from %s", path)
-            with open(path) as f:
-                user_config = yaml.safe_load(f) or {}
-            user_keys = set(user_config.keys())
-            _reject_bad_keys(user_keys, source=str(path))
-            _deep_merge(config, user_config)
-        else:
-            logger.warning("Config file %s not found, using defaults", path)
+        if not path.is_file():
+            # Running on defaults would silently disable drop and any custom
+            # channel list -- a wrong mount path must be loud.
+            raise ConfigError(f"Config file {path} not found")
+        logger.info("Loading config from %s", path)
+        with open(path) as f:
+            user_config = yaml.safe_load(f)
+        if user_config is None:
+            user_config = {}
+        if not isinstance(user_config, dict):
+            raise ConfigError(
+                f"Config file {path} must be a mapping of keys to values; "
+                f"got {type(user_config).__name__}"
+            )
+        _reject_bad_keys(set(user_config), source=str(path))
+        config.update(user_config)
+        source = str(path)
+
+    errors: list[str] = []
+    _validate_values(config, errors)
+    if errors:
+        raise ConfigError(
+            f"Invalid config value(s) in {source}:\n" + "\n".join(f"  - {e}" for e in errors)
+        )
+
+    logging.getLogger("floodgate").setLevel(config["log_level"])
+    return config
+
+
+def _validate_values(config: dict[str, Any], errors: list[str]) -> None:
+    """Type- and range-check every key, normalising where a spelling is
+    unambiguous (log_level case, log_format case). Appends to `errors`.
+
+    Booleans must be real YAML booleans: a quoted "false" is a truthy string,
+    so `drop_enabled: "false"` would otherwise turn drop ON.
+    """
+    for key in ("zerohop_enabled", "drop_enabled", "stats_log"):
+        if not isinstance(config[key], bool):
+            errors.append(f"`{key}` must be true or false (unquoted); got {config[key]!r}")
+
+    _check_int(config, "grpc_port", errors, 1, 65535)
+    _check_int(config, "health_port", errors, 1, 65535)
+    _check_int(config, "grpc_max_workers", errors, 1)
+    _check_int(config, "stats_interval_s", errors, 1)
+
+    level = config["log_level"]
+    if isinstance(level, str) and level.upper() in _LOG_LEVELS:
+        config["log_level"] = level.upper()
+    else:
+        errors.append(f"`log_level` must be one of {', '.join(_LOG_LEVELS)}; got {level!r}")
 
     # FLOODGATE_LOG_FORMAT is convenient in container/k8s environments where
     # editing the mounted config.yaml is awkward.
     env_fmt = os.environ.get("FLOODGATE_LOG_FORMAT")
-    if env_fmt is not None:
-        config["log_format"] = env_fmt.lower()
+    fmt, label = (env_fmt, "FLOODGATE_LOG_FORMAT") if env_fmt is not None else (
+        config["log_format"], "`log_format`")
+    if isinstance(fmt, str) and fmt.lower() in _LOG_FORMATS:
+        config["log_format"] = fmt.lower()
+    else:
+        errors.append(f"{label} must be one of {', '.join(_LOG_FORMATS)}; got {fmt!r}")
 
-    config["_zerohop_channels_set"] = _validate_string_list(
-        config.get("zerohop_channels"), key="zerohop_channels",
-    )
-    config["_drop_channels_set"]    = _resolve_drop_channels(
-        config.get("drop_channels"),
-        config["_zerohop_channels_set"],
-    )
-    config["_drop_portnums_set"]    = _validate_string_list(
-        config.get("drop_portnums"), key="drop_portnums",
-    )
+    topic_filter = config["topic_filter"]
+    if not isinstance(topic_filter, str) or not topic_filter:
+        errors.append(f"`topic_filter` must be a non-empty string; got {topic_filter!r}")
 
-    config["grpc_max_workers"] = _validate_positive_int(
-        config.get("grpc_max_workers"), key="grpc_max_workers",
-    )
+    try:
+        config["_zerohop_channels_set"] = _validate_string_list(
+            config["zerohop_channels"], key="zerohop_channels",
+        )
+        config["_drop_channels_set"] = _resolve_drop_channels(
+            config["drop_channels"], config["_zerohop_channels_set"],
+        )
+    except ConfigError as exc:
+        errors.append(str(exc))
+    try:
+        config["_drop_portnums_set"] = _validate_string_list(
+            config["drop_portnums"], key="drop_portnums",
+        )
+        _check_portnum_names(config["_drop_portnums_set"], errors)
+    except ConfigError as exc:
+        errors.append(str(exc))
 
-    log_level = config.get("log_level", "INFO").upper()
-    logging.getLogger("floodgate").setLevel(getattr(logging, log_level, logging.INFO))
 
-    return config
+def _check_int(config: dict[str, Any], key: str, errors: list[str],
+               low: int, high: int | None = None) -> None:
+    """Append an error unless config[key] is an int in [low, high].
+
+    bool is a subclass of int, so `grpc_port: true` is rejected explicitly.
+    """
+    value = config[key]
+    in_range = (isinstance(value, int) and not isinstance(value, bool)
+                and value >= low and (high is None or value <= high))
+    if not in_range:
+        bound = f">= {low}" if high is None else f"between {low} and {high}"
+        errors.append(f"`{key}` must be an integer {bound}; got {value!r}")
+
+
+def _check_portnum_names(names: set[str], errors: list[str]) -> None:
+    """Reject `drop_portnums` entries that are not Meshtastic PortNum names.
+
+    floodgate only ever compares against canonical enum names, so a typo
+    (`RANGETEST_APP`) or the wrong case would never match anything.
+    """
+    try:
+        from meshtastic import portnums_pb2
+    except ImportError:
+        # Only possible without generated stubs (some test setups); the
+        # runtime image always has them.
+        logger.warning("Meshtastic protobufs not importable; drop_portnums names not checked")
+        return
+    known = set(portnums_pb2.PortNum.keys())
+    for name in sorted(names - known):
+        hint = difflib.get_close_matches(name.upper(), known, n=1)
+        suggestion = f" (did you mean {hint[0]!r}?)" if hint else ""
+        errors.append(f"`drop_portnums` entry {name!r} is not a Meshtastic portnum{suggestion}")
 
 
 def should_zerohop(config: dict, channel_name: str) -> bool:
@@ -186,23 +274,6 @@ def _validate_string_list(value, key: str) -> set[str]:
     return set(value)
 
 
-def _validate_positive_int(value, key: str) -> int:
-    """Coerce a YAML scalar into a positive int; reject anything else.
-
-    `grpc.server(max_workers=...)` raises on 0 or a negative, and a value given
-    as a string would be accepted by YAML but blow up at server construction —
-    long after the config was "loaded". Fail at load time instead.
-    Note bool is a subclass of int, so `grpc_max_workers: true` is rejected too.
-    """
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ConfigError(
-            f"`{key}` must be a positive integer; got {value!r} ({type(value).__name__})"
-        )
-    if value < 1:
-        raise ConfigError(f"`{key}` must be >= 1; got {value}")
-    return value
-
-
 def _reject_bad_keys(user_keys: set[str], source: str) -> None:
     """Refuse removed and unknown keys, reporting both in one error.
 
@@ -228,26 +299,3 @@ def _reject_bad_keys(user_keys: set[str], source: str) -> None:
             f"Known keys: {', '.join(sorted(DEFAULT_CONFIG))}"
         )
     raise ConfigError("\n".join(parts))
-
-
-def _deep_copy_dict(d: dict) -> dict:
-    """Shallow-recursive copy of nested dicts and lists. Sufficient for our
-    config shape — no nested dicts of dicts deeper than two levels."""
-    result = {}
-    for k, v in d.items():
-        if isinstance(v, dict):
-            result[k] = _deep_copy_dict(v)
-        elif isinstance(v, list):
-            result[k] = list(v)
-        else:
-            result[k] = v
-    return result
-
-
-def _deep_merge(base: dict, override: dict) -> None:
-    """Merge override into base in place. Lists and scalars are replaced wholesale."""
-    for k, v in override.items():
-        if k in base and isinstance(base[k], dict) and isinstance(v, dict):
-            _deep_merge(base[k], v)
-        else:
-            base[k] = v

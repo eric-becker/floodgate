@@ -68,6 +68,27 @@ class TestExtractPortnumJson:
         payload = json.dumps({"type": "text", "payload": "raw string"}).encode()
         assert extract_portnum_json(payload) == "TEXT_MESSAGE_APP"
 
+    def test_firmware_range_test_json_is_unidentifiable(self):
+        # Firmware's JSON serializer has no RANGE_TEST_APP case (2.5-2.7;
+        # 2.8 publishes no JSON), so a range test arrives with an empty type.
+        payload = json.dumps({"id": 1, "type": "", "from": 1, "to": 4294967295}).encode()
+        assert extract_portnum_json(payload) is None
+
+    @pytest.mark.parametrize("type_", ["gpios_changed", "gpios_read_reply"])
+    def test_remote_hardware_types(self, type_):
+        payload = json.dumps({"type": type_}).encode()
+        assert extract_portnum_json(payload) == "REMOTE_HARDWARE_APP"
+
+    def test_type_map_matches_firmware_serializer(self):
+        # The `type` strings MeshPacketSerializer::JsonSerialize emits,
+        # identical in firmware 2.5.20, 2.6.11 and 2.7.11.
+        from floodgate.portnum import _JSON_TYPE_TO_PORTNUM
+        assert set(_JSON_TYPE_TO_PORTNUM) == {
+            "text", "telemetry", "nodeinfo", "position", "waypoint",
+            "neighborinfo", "traceroute", "detection", "paxcounter",
+            "gpios_changed", "gpios_read_reply",
+        }
+
     def test_type_case_insensitive(self):
         payload = json.dumps({"type": "TEXT"}).encode()
         assert extract_portnum_json(payload) == "TEXT_MESSAGE_APP"

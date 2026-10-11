@@ -97,7 +97,7 @@ Drop runs **before** zerohop. A packet matched by drop is denied entirely and ne
 | `stats_log` | `true` | Log periodic stats summaries. Set `false` to disable. |
 
 The pre-rename keys `channel_policy` / `channel_blacklist` / `channel_whitelist` were removed. floodgate refuses to load a config containing any of them and prints the new equivalents.
-Any other key not in the table above is also rejected at startup, so a typo (`zerohop_channel:`) fails loudly instead of silently leaving the default in effect.
+Any key not in `DEFAULT_CONFIG` (`src/floodgate/config.py`) is also rejected at startup, so a typo (`zerohop_channel:`) fails loudly instead of silently leaving the default in effect. Every value is type- and range-checked too (unquoted booleans, ports 1-65535, known log levels/formats, real `PortNum` names, an existing config file when one is named); `load_config` collects all value errors into one `ConfigError`, and the CLI exits 2 on it.
 
 ## Documentation and Test Discipline
 
