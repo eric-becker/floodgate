@@ -145,8 +145,19 @@ class TestLoadConfigFromFile:
         cfg = load_config(None)
         assert cfg["zerohop_enabled"] is False
 
-    def test_missing_file_uses_defaults(self):
-        cfg = load_config("/nonexistent/config.yaml")
+    def test_missing_explicit_file_raises(self):
+        # A wrong mount path must not silently run on defaults (drop off).
+        with pytest.raises(ConfigError, match="not found"):
+            load_config("/nonexistent/config.yaml")
+
+    def test_missing_file_from_env_raises(self, monkeypatch):
+        monkeypatch.setenv("FLOODGATE_CONFIG", "/nonexistent/config.yaml")
+        with pytest.raises(ConfigError, match="not found"):
+            load_config()
+
+    def test_no_path_uses_defaults(self, monkeypatch):
+        monkeypatch.delenv("FLOODGATE_CONFIG", raising=False)
+        cfg = load_config()
         assert cfg["zerohop_enabled"] is True
         assert len(cfg["zerohop_channels"]) == 8
 
@@ -390,6 +401,23 @@ class TestUnknownKeysRejected:
     def test_shipped_config_yaml_loads(self):
         load_config(str(Path(__file__).parent.parent / "config.yaml"))
 
+    def test_integration_config_loads(self):
+        load_config(str(Path(__file__).parent / "integration" / "config.yaml"))
+
+    def test_k8s_manifest_config_loads(self, tmp_path):
+        repo = Path(__file__).parent.parent
+        configmap = yaml.safe_load((repo / "k8s" / "configmap.yaml").read_text())
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(configmap["data"]["config.yaml"])
+        load_config(str(cfg_file))
+
+    def test_chart_default_config_loads(self, tmp_path):
+        repo = Path(__file__).parent.parent
+        values = yaml.safe_load((repo / "charts" / "floodgate" / "values.yaml").read_text())
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump(values["config"]))
+        load_config(str(cfg_file))
+
 
     def test_removed_and_unknown_keys_reported_together(self, tmp_path):
         """One error covers both, so fixing a config doesn't take two restarts."""
@@ -400,3 +428,111 @@ class TestUnknownKeysRejected:
         msg = str(exc.value)
         assert "channel_policy" in msg
         assert "drop_portnum"   in msg
+
+
+# ---------------------------------------------------------------------------
+# Value validation
+# ---------------------------------------------------------------------------
+
+def _load(tmp_path, data):
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(yaml.dump(data) if not isinstance(data, str) else data)
+    return load_config(str(cfg_file))
+
+
+class TestValueValidation:
+    """Every key is type- and range-checked at load time. Each of these used to
+    load: a quoted "false" is truthy, so `drop_enabled: "false"` turned drop ON."""
+
+    @pytest.mark.parametrize("key", ["zerohop_enabled", "drop_enabled", "stats_log"])
+    @pytest.mark.parametrize("value", ["false", "off", "true", 0, 1, None])
+    def test_bool_keys_reject_non_bools(self, tmp_path, key, value):
+        with pytest.raises(ConfigError, match=key):
+            _load(tmp_path, {key: value})
+
+    @pytest.mark.parametrize("key", ["zerohop_enabled", "drop_enabled", "stats_log"])
+    def test_bool_keys_accept_bools(self, tmp_path, key):
+        assert _load(tmp_path, {key: False})[key] is False
+
+    @pytest.mark.parametrize("key", ["grpc_port", "health_port"])
+    @pytest.mark.parametrize("value", ["9000", 0, -1, 65536, True, None])
+    def test_ports_reject_out_of_range_or_non_int(self, tmp_path, key, value):
+        with pytest.raises(ConfigError, match=key):
+            _load(tmp_path, {key: value})
+
+    @pytest.mark.parametrize("key", ["grpc_port", "health_port"])
+    @pytest.mark.parametrize("value", [1, 65535])
+    def test_ports_accept_valid_range(self, tmp_path, key, value):
+        assert _load(tmp_path, {key: value})[key] == value
+
+    @pytest.mark.parametrize("value", [0, -5, "60", True, None])
+    def test_stats_interval_rejects_non_positive(self, tmp_path, value):
+        # 0 used to make the stats thread busy-loop on stop_event.wait(0).
+        with pytest.raises(ConfigError, match="stats_interval_s"):
+            _load(tmp_path, {"stats_interval_s": value})
+
+    def test_log_level_normalised(self, tmp_path):
+        assert _load(tmp_path, {"log_level": "debug"})["log_level"] == "DEBUG"
+
+    @pytest.mark.parametrize("value", ["VERBOSE", "", True, None, 10])
+    def test_log_level_rejects_unknown(self, tmp_path, value):
+        with pytest.raises(ConfigError, match="log_level"):
+            _load(tmp_path, {"log_level": value})
+
+    def test_log_format_normalised(self, tmp_path):
+        assert _load(tmp_path, {"log_format": "JSON"})["log_format"] == "json"
+
+    @pytest.mark.parametrize("value", ["xml", "", None, True])
+    def test_log_format_rejects_unknown(self, tmp_path, value):
+        with pytest.raises(ConfigError, match="log_format"):
+            _load(tmp_path, {"log_format": value})
+
+    def test_log_format_env_var_validated(self, monkeypatch):
+        monkeypatch.delenv("FLOODGATE_CONFIG", raising=False)
+        monkeypatch.setenv("FLOODGATE_LOG_FORMAT", "xml")
+        with pytest.raises(ConfigError, match="FLOODGATE_LOG_FORMAT"):
+            load_config()
+
+    @pytest.mark.parametrize("value", ["", None, 5, ["msh/#"]])
+    def test_topic_filter_rejects_non_string(self, tmp_path, value):
+        with pytest.raises(ConfigError, match="topic_filter"):
+            _load(tmp_path, {"topic_filter": value})
+
+    @pytest.mark.parametrize("text", ["- a\n- b\n", "just a string\n", "42\n"])
+    def test_top_level_must_be_a_mapping(self, tmp_path, text):
+        with pytest.raises(ConfigError, match="mapping"):
+            _load(tmp_path, text)
+
+    def test_empty_file_uses_defaults(self, tmp_path):
+        assert _load(tmp_path, "")["zerohop_enabled"] is True
+
+    def test_all_value_errors_reported_together(self, tmp_path):
+        with pytest.raises(ConfigError) as exc:
+            _load(tmp_path, {"drop_enabled": "false", "grpc_port": 0, "log_level": "LOUD"})
+        msg = str(exc.value)
+        assert "drop_enabled" in msg
+        assert "grpc_port" in msg
+        assert "log_level" in msg
+
+
+class TestDropPortnumNames:
+    """A misspelled portnum used to load and log "Drop ENABLED" while matching nothing."""
+
+    def test_unknown_portnum_rejected_with_suggestion(self, tmp_path):
+        pytest.importorskip("meshtastic")
+        with pytest.raises(ConfigError) as exc:
+            _load(tmp_path, {"drop_portnums": ["RANGETEST_APP"]})
+        msg = str(exc.value)
+        assert "RANGETEST_APP" in msg
+        assert "RANGE_TEST_APP" in msg   # did-you-mean
+
+    def test_wrong_case_portnum_rejected(self, tmp_path):
+        pytest.importorskip("meshtastic")
+        with pytest.raises(ConfigError, match="range_test_app"):
+            _load(tmp_path, {"drop_portnums": ["range_test_app"]})
+
+    def test_known_portnums_accepted(self, tmp_path):
+        pytest.importorskip("meshtastic")
+        cfg = _load(tmp_path, {"drop_portnums": ["RANGE_TEST_APP", "DETECTION_SENSOR_APP"]})
+        assert cfg["_drop_portnums_set"] == {"RANGE_TEST_APP", "DETECTION_SENSOR_APP"}
+

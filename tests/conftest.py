@@ -1,11 +1,11 @@
 """Shared pytest configuration and markers.
 
 Test tiers:
-  (default)   Unit tests — no external dependencies, always run.
-  integration Docker-based tests — require Docker daemon, skipped by default.
-              Run with: pytest -m integration
-  smoke       Container/deployment smoke tests — build + start image, run /health.
-              Run with: pytest -m smoke
+  (default)   Unit tests — no external dependencies.
+  smoke       Container smoke test — builds and starts the image, checks /health.
+              Requires Docker. Run with: pytest -m smoke
+  The Docker Compose integration harness is not a pytest tier; run it with
+  ./scripts/run-integration.sh.
 
 In CI, tiers are run as separate jobs so failures are clearly attributed.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 
 # Make the generated meshtastic protobuf bindings importable when present.
 # Tests that need them call pytest.importorskip("meshtastic") and skip
-# gracefully when the bindings aren't generated (e.g. CI's mock-only path).
+# gracefully when the bindings aren't generated.
 _generated = Path(__file__).resolve().parent.parent / "generated"
 if _generated.is_dir() and str(_generated) not in sys.path:
     sys.path.insert(0, str(_generated))

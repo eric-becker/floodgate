@@ -1,12 +1,13 @@
 """Logging formatter setup — text (default) or JSON (for Loki/Grafana)."""
 
 import logging
+import time
 
 # Fields rendered by StructuredTextFormatter, in display order.
 # `portnum` appears on dropped events (and is harmless when absent on others).
 _MESSAGE_FIELDS = (
     "topic", "channel", "encoding", "portnum", "id", "from", "to",
-    "hop_limit", "hop_start", "relay", "via_mqtt",
+    "hop_limit", "hop_start", "relay", "via_mqtt", "bytes",
 )
 _STATS_FIELDS = (
     "interval_s", "zerohop", "passthru", "noop", "dropped",
@@ -21,6 +22,20 @@ _OUTCOME_TAGS = {
     "dropped":  "[DROPPED]",
     "warn":     "[WARN]",
 }
+
+
+def _escape(value) -> str:
+    """Render a field value on one line.
+
+    Topics and channel names are publisher-controlled, so a newline or ANSI
+    escape could otherwise forge a line that looks like a floodgate outcome.
+    Control characters are written as Python escapes; printable non-ASCII
+    (channel names in any script) is kept as-is.
+    """
+    text = str(value)
+    if text.isprintable():
+        return text
+    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in text)
 
 
 class StructuredTextFormatter(logging.Formatter):
@@ -49,7 +64,7 @@ class StructuredTextFormatter(logging.Formatter):
         for key in _MESSAGE_FIELDS:
             val = getattr(record, key, None)
             if val is not None:
-                parts.append(f"{key}={val}")
+                parts.append(f"{key}={_escape(val)}")
         return " ".join(parts)
 
     def _format_stats(self, record):
@@ -69,11 +84,14 @@ def build_formatter(log_format: str) -> logging.Formatter:
         except ImportError:
             from pythonjsonlogger.jsonlogger import JsonFormatter  # type: ignore[no-redef]
 
-        return JsonFormatter(
+        formatter = JsonFormatter(
             fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
             rename_fields={"levelname": "level", "asctime": "timestamp"},
             datefmt="%Y-%m-%dT%H:%M:%SZ",
         )
+        # The datefmt promises UTC ("Z"); make it true on non-UTC hosts.
+        formatter.converter = time.gmtime
+        return formatter
     return StructuredTextFormatter()
 
 

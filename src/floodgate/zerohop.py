@@ -280,17 +280,28 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
       effective hop_limit = hop_start - hops_away
 
     Returns (modified_bytes, original_hop_limit, packet_meta):
-      - (None, None, {})  on parse error
+      - (None, None, {})  on parse error, a non-object payload, or a hop
+                          field that is not an integer
       - (None, 0,    meta) if effective hop_limit is already 0
       - (bytes, N,   meta) on success (adds hop_limit: 0 to the JSON)
     """
     try:
         data = _json.loads(payload)
-        logger.debug("zerohop_json: parsed %d bytes, keys=%s", len(payload), list(data.keys()))
     except Exception as exc:
         logger.warning("Failed to parse JSON payload (%d bytes): %s(%s)",
                        len(payload), type(exc).__name__, exc)
         return None, None, {}
+    if not isinstance(data, dict):
+        logger.warning("JSON payload is a %s, not an object (%d bytes)",
+                       type(data).__name__, len(payload))
+        return None, None, {}
+    bad = [k for k in ("hop_limit", "hop_start", "hops_away")
+           if k in data and (isinstance(data[k], bool) or not isinstance(data[k], int))]
+    if bad:
+        logger.warning("JSON hop field(s) not integers: %s",
+                       ", ".join(f"{k}={data[k]!r}" for k in bad))
+        return None, None, {}
+    logger.debug("zerohop_json: parsed %d bytes, keys=%s", len(payload), list(data.keys()))
 
     meta = {}
     for src_key, meta_key in [("id", "packet_id"), ("from", "sender"),

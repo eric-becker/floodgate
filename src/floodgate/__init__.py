@@ -1,3 +1,3 @@
 """floodgate: zero-hop MQTT anti-flood for Meshtastic."""
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"

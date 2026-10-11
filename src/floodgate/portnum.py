@@ -2,7 +2,10 @@
 
 Used by the drop filter to decide whether a packet should be denied.
 For `/e/` packets, decryption with the default Meshtastic key is required
-(see `decrypt.py`); custom-keyed channels return None and are delivered.
+(see `decrypt.py`). A custom-keyed packet decrypts to garbage, which almost
+always fails to parse and returns None (delivered); rarely, garbage parses as
+a valid `Data` message, which is why drop should be scoped to default-key
+channels.
 """
 
 import json as _json
@@ -12,23 +15,23 @@ from .decrypt import decrypt
 
 logger = logging.getLogger(__name__)
 
-# Gateway-published JSON `type` field → proto enum name.
-# Add entries as new portnums appear in the wild. Unknown types fall through
-# to None and the packet is delivered (drop only acts on identified portnums).
+# Firmware JSON `type` field -> proto enum name. These are exactly the strings
+# MeshPacketSerializer::JsonSerialize emits (identical in firmware 2.5.20,
+# 2.6.11 and 2.7.11; 2.8 no longer publishes JSON). Every other portnum,
+# range test included, is published with an empty `type` and cannot be
+# identified, so it is delivered.
 _JSON_TYPE_TO_PORTNUM = {
-    "text":           "TEXT_MESSAGE_APP",
-    "position":       "POSITION_APP",
-    "nodeinfo":       "NODEINFO_APP",
-    "telemetry":      "TELEMETRY_APP",
-    "traceroute":     "TRACEROUTE_APP",
-    "neighborinfo":   "NEIGHBORINFO_APP",
-    "rangetest":      "RANGE_TEST_APP",
-    "remotehardware": "REMOTE_HARDWARE_APP",
-    "routing":        "ROUTING_APP",
-    "admin":          "ADMIN_APP",
-    "waypoint":       "WAYPOINT_APP",
-    "detection":      "DETECTION_SENSOR_APP",
-    "paxcounter":     "PAXCOUNTER_APP",
+    "text":             "TEXT_MESSAGE_APP",
+    "telemetry":        "TELEMETRY_APP",
+    "nodeinfo":         "NODEINFO_APP",
+    "position":         "POSITION_APP",
+    "waypoint":         "WAYPOINT_APP",
+    "neighborinfo":     "NEIGHBORINFO_APP",
+    "traceroute":       "TRACEROUTE_APP",
+    "detection":        "DETECTION_SENSOR_APP",
+    "paxcounter":       "PAXCOUNTER_APP",
+    "gpios_changed":    "REMOTE_HARDWARE_APP",
+    "gpios_read_reply": "REMOTE_HARDWARE_APP",
 }
 
 _mqtt_pb2     = None
@@ -80,7 +83,10 @@ def extract_portnum_json(payload: bytes) -> str | None:
     Probed in order:
       1. `payload.decoded.portnum`  (gateway packet-wrapper, already an enum name)
       2. top-level `portnum`         (rare: explicit field with the enum name)
-      3. `_JSON_TYPE_TO_PORTNUM[type]` (common: short-name → enum-name table)
+      3. `_JSON_TYPE_TO_PORTNUM[type]` (firmware's own JSON output)
+
+    Probes 1 and 2 cover wrapper formats seen in captured traffic from other
+    publishers; firmware's JSON only ever sets `type`.
     """
     try:
         data = _json.loads(payload)

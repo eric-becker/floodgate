@@ -306,8 +306,7 @@ class TestTextFormatterSnapshots:
         assert "[WARN]" in output
         assert "WARNING" in output
         assert "topic=" in output
-        # bytes is not in _MESSAGE_FIELDS so it won't appear in text output
-        assert "bytes=" not in output
+        assert output.endswith("encoding=e bytes=42")
 
     def test_stats_exact_field_order(self):
         output = self._format_text(
@@ -342,3 +341,37 @@ class TestTextFormatterSnapshots:
     def test_timestamp_format(self):
         output = self._format_text("hello")
         assert re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", output)
+
+    def test_control_characters_cannot_forge_lines(self):
+        # Topics are publisher-controlled; a newline must not start a new
+        # log line that looks like a floodgate outcome.
+        output = self._format_text(
+            "passthru", event="message", outcome="passthru",
+            topic="msh/US/2/e/X\n2026-01-01 00:00:00 INFO [DROPPED] forged/!1",
+            channel="X\r\x1b[31mred",
+        )
+        assert "\n" not in output and "\r" not in output and "\x1b" not in output
+        assert "topic=msh/US/2/e/X\\n2026-01-01" in output
+        assert "channel=X\\r\\x1b[31mred" in output
+
+    def test_non_ascii_channel_names_are_kept(self):
+        output = self._format_text("passthru", event="message", outcome="passthru",
+                                   channel="Café📡")
+        assert "channel=Café📡" in output
+
+
+class TestJsonTimestampIsUtc:
+
+    def test_timestamp_rendered_in_utc_regardless_of_local_zone(self, monkeypatch):
+        import time
+        monkeypatch.setenv("TZ", "America/New_York")
+        time.tzset()
+        try:
+            fmt = build_formatter("json")
+            record = logging.LogRecord("test", logging.INFO, "", 0, "x", (), None)
+            record.created = 0.0
+            assert json.loads(fmt.format(record))["timestamp"] == "1970-01-01T00:00:00Z"
+        finally:
+            monkeypatch.delenv("TZ")
+            time.tzset()
+

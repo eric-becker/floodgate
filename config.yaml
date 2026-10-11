@@ -1,7 +1,8 @@
 # floodgate configuration
 
-# Zerohop: modify hop_limit to 0 and let EMQX deliver the modified packet.
-# This is the core anti-flood behavior — without it floodgate is a no-op.
+# Zerohop: set hop_limit and hop_start to 0 and let EMQX deliver the modified
+# packet. A downlinking gateway shows it to its own user but never retransmits
+# it on RF. Booleans must be unquoted: a quoted "false" is rejected.
 zerohop_enabled: true
 
 # Channels to zero-hop. Standard Meshtastic public presets.
@@ -26,20 +27,24 @@ drop_enabled: false
 #   null               — apply to ALL channels (no scoping)
 drop_channels: "zerohop_channels"
 
-# Portnums to drop, by Meshtastic proto enum name. See:
+# Portnums to drop, by exact Meshtastic proto enum name (unknown names are
+# rejected at startup). See:
 # https://buf.build/meshtastic/protobufs/docs/main:meshtastic#meshtastic.PortNum
-# Note: drop only acts on packets whose portnum floodgate can read. For
-# protobuf (/e/) topics that means channels using the default encryption key
-# (AQ==); custom-keyed channels are always delivered.
+# Drop only acts on packets whose portnum floodgate can read: protobuf (/e/)
+# packets on channels using the default key (AQ==), and the few JSON types
+# firmware labels. Keep drop_channels scoped to default-key channels -- a
+# custom-keyed packet decrypted with the default key can, rarely, look like a
+# matching portnum.
 drop_portnums: []
 
 grpc_port: 9000
 
 # Size of the gRPC server thread pool. EMQX opens `pool_size` concurrent
 # connections to the ExHook (EMQX's own default is 8) — set this to match or
-# exceed it, or calls queue behind busy workers. Under `failed_action: deny`
-# that queuing is not just latency: a call slower than the broker's
-# `request_timeout` is a denied publish, i.e. a dropped mesh packet.
+# exceed it, or calls queue behind busy workers. A call slower than the
+# broker's `request_timeout` counts as failed and EMQX delivers the message
+# unmodified, whatever `failed_action` says: an undersized pool silently loses
+# zero-hop protection rather than dropping packets.
 grpc_max_workers: 16
 
 health_port: 8080
@@ -53,6 +58,6 @@ log_level: "INFO"
 # Override with FLOODGATE_LOG_FORMAT env var.
 log_format: "text"
 
-# Log periodic stats summary (zerohop/passthru/noop/dropped counts).
-# Set false to disable stats log lines.
+# Log a periodic stats summary (zerohop/passthru/noop/dropped/skipped/errors
+# counts per interval). Set false to disable stats log lines.
 stats_log: true

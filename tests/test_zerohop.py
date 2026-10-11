@@ -170,8 +170,9 @@ class TestZerohopJson:
         """hops_away must be zeroed in the realistic Meshtastic JSON shape
         so consumers computing hops-taken = hop_start - hops_away get 0,
         not the original hop_start (issue #46)."""
+        # hops_away must start non-zero, or the zeroing can't be observed.
         modified, _, _ = zerohop_json(
-            self._payload_meshtastic(hop_start=5, hops_away=0)
+            self._payload_meshtastic(hop_start=5, hops_away=2)
         )
         assert modified is not None
         data = json.loads(modified)
@@ -908,3 +909,172 @@ class TestAntifloodStats:
         stats.inc("dropped")
         snap = stats.snapshot()
         assert snap["total"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Hardening: malformed JSON, the fail-open safety net, stats, boundaries
+# ---------------------------------------------------------------------------
+
+def _delta(before: dict, key: str) -> int:
+    return AntifloodStats.snapshot(_stats_module())[key] - before[key]
+
+
+def _stats_module():
+    from floodgate import zerohop
+    return zerohop.stats
+
+
+class TestMalformedJsonWarns:
+    """Valid JSON of the wrong shape must take the warn path (logged, counted,
+    delivered unchanged), not escape as an unhandled TypeError."""
+
+    @pytest.mark.parametrize("payload", [
+        b"42",
+        b'"a string"',
+        b"[1, 2, 3]",
+        b'{"id": 1, "hop_start": "5", "hops_away": "0"}',
+        b'{"id": 1, "hop_limit": "3"}',
+        b'{"id": 1, "hop_limit": true}',
+        b'{"id": 1, "hop_start": 5, "hops_away": null}',
+    ])
+    def test_wrong_shape_is_warn_and_passthru(self, payload, caplog):
+        before = _stats_module().snapshot()
+        config = _make_config(zerohop_channels=["LongFast"])
+        with caplog.at_level(logging.INFO, logger="floodgate.zerohop"):
+            result = process_message("msh/US/2/json/LongFast/!aabbccdd", payload, config)
+        assert result.action == ACTION_PASSTHRU
+        outcomes = [r.outcome for r in caplog.records if hasattr(r, "outcome")]
+        assert outcomes == ["warn"]
+        assert _delta(before, "errors") == 1
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    @pytest.mark.parametrize("payload", [b"42", b"[1]", b'{"hop_start": "5"}'])
+    def test_zerohop_json_returns_parse_error_tuple(self, payload):
+        assert zerohop_json(payload) == (None, None, {})
+
+
+class TestFailOpenSafetyNet:
+
+    def test_unexpected_exception_passes_through_and_counts_error(self, caplog):
+        before = _stats_module().snapshot()
+        config = _make_config(zerohop_channels=["LongFast"])
+        with patch("floodgate.zerohop._process_message_inner",
+                   side_effect=RuntimeError("boom")):
+            with caplog.at_level(logging.ERROR, logger="floodgate.zerohop"):
+                result = process_message("msh/US/2/e/LongFast/!aabbccdd", b"x", config)
+        assert result.action == ACTION_PASSTHRU
+        assert result.payload is None
+        assert _delta(before, "errors") == 1
+        assert any("boom" in r.getMessage() for r in caplog.records)
+
+
+class TestStatsAttribution:
+    """Each outcome increments exactly its own counter -- /health and the
+    [STATS] line are only as good as this."""
+
+    def _run(self, topic, payload, config):
+        before = _stats_module().snapshot()
+        process_message(topic, payload, config)
+        after = _stats_module().snapshot()
+        return {k: after[k] - before[k] for k in after if after[k] != before[k]}
+
+    def test_skipped(self):
+        assert self._run("msh/US/2/map/", b"{}", _make_config()) == {"skipped": 1, "total": 1}
+
+    def test_passthru(self):
+        payload = json.dumps({"id": 1, "hop_start": 3, "hops_away": 0}).encode()
+        changed = self._run("msh/US/2/json/Private/!aabbccdd", payload, _make_config())
+        assert changed == {"passthru": 1, "total": 1}
+
+    def test_zerohop(self):
+        payload = json.dumps({"id": 1, "hop_start": 3, "hops_away": 0}).encode()
+        config = _make_config(zerohop_channels=["LongFast"])
+        changed = self._run("msh/US/2/json/LongFast/!aabbccdd", payload, config)
+        assert changed == {"zerohop": 1, "total": 1}
+
+    def test_noop(self):
+        payload = json.dumps({"id": 1, "hop_start": 3, "hops_away": 3}).encode()
+        config = _make_config(zerohop_channels=["LongFast"])
+        changed = self._run("msh/US/2/json/LongFast/!aabbccdd", payload, config)
+        assert changed == {"noop": 1, "total": 1}
+
+    def test_dropped(self):
+        payload = json.dumps({"id": 1, "type": "text", "hop_start": 3, "hops_away": 0}).encode()
+        config = _make_config(zerohop_channels=["LongFast"], drop_enabled=True,
+                              drop_channels=["LongFast"], drop_portnums=["TEXT_MESSAGE_APP"])
+        changed = self._run("msh/US/2/json/LongFast/!aabbccdd", payload, config)
+        assert changed == {"dropped": 1, "total": 1}
+
+    def test_warn_counts_as_error(self):
+        config = _make_config(zerohop_channels=["LongFast"])
+        changed = self._run("msh/US/2/json/LongFast/!aabbccdd", b"[1]", config)
+        assert changed == {"errors": 1, "total": 1}
+
+
+class TestHopLimitBoundary:
+    """hop_limit 1 is a real, live packet (one hop left): it must be zeroed,
+    not treated as already-zero."""
+
+    def test_json_hop_limit_one_is_zeroed(self):
+        modified, old_hop, _ = zerohop_json(json.dumps(
+            {"id": 1, "hop_start": 3, "hops_away": 2}).encode())
+        assert old_hop == 1
+        assert json.loads(modified)["hop_limit"] == 0
+
+    def test_protobuf_hop_limit_one_is_zeroed(self):
+        mesh_pb2 = pytest.importorskip("meshtastic.mesh_pb2")
+        mqtt_pb2 = pytest.importorskip("meshtastic.mqtt_pb2")
+        env = mqtt_pb2.ServiceEnvelope(channel_id="LongFast", gateway_id="!aabbccdd")
+        env.packet.CopyFrom(mesh_pb2.MeshPacket(id=7, hop_limit=1, hop_start=3,
+                                                encrypted=b"\x01\x02"))
+        modified, old_hop, _ = zerohop_protobuf(env.SerializeToString())
+        assert old_hop == 1
+        out = mqtt_pb2.ServiceEnvelope()
+        out.ParseFromString(modified)
+        assert (out.packet.hop_limit, out.packet.hop_start) == (0, 0)
+
+
+class TestProtobufDropThroughPipeline:
+    """The protobuf drop path end to end, unmocked: decrypt with the default
+    key, parse Data, match the portnum, deny."""
+
+    def test_range_test_on_default_key_channel_is_dropped(self):
+        mesh_pb2 = pytest.importorskip("meshtastic.mesh_pb2")
+        mqtt_pb2 = pytest.importorskip("meshtastic.mqtt_pb2")
+        portnums_pb2 = pytest.importorskip("meshtastic.portnums_pb2")
+        from tests.test_portnum import _build_encrypted_envelope
+        env = _build_encrypted_envelope(mesh_pb2, mqtt_pb2,
+                                        portnum=portnums_pb2.PortNum.RANGE_TEST_APP,
+                                        payload_bytes=b"seq 1", hop_limit=3, hop_start=3)
+        config = _make_config(zerohop_channels=["LongFast"], drop_enabled=True,
+                              drop_channels=["LongFast"], drop_portnums=["RANGE_TEST_APP"])
+        assert process_message("msh/US/2/e/LongFast/!12345678", env, config).action == ACTION_DROP
+
+    def test_text_on_same_channel_is_zero_hopped_not_dropped(self):
+        mesh_pb2 = pytest.importorskip("meshtastic.mesh_pb2")
+        mqtt_pb2 = pytest.importorskip("meshtastic.mqtt_pb2")
+        portnums_pb2 = pytest.importorskip("meshtastic.portnums_pb2")
+        from tests.test_portnum import _build_encrypted_envelope
+        env = _build_encrypted_envelope(mesh_pb2, mqtt_pb2,
+                                        portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+                                        payload_bytes=b"hi", hop_limit=3, hop_start=3)
+        config = _make_config(zerohop_channels=["LongFast"], drop_enabled=True,
+                              drop_channels=["LongFast"], drop_portnums=["RANGE_TEST_APP"])
+        assert process_message("msh/US/2/e/LongFast/!12345678", env, config).action == ACTION_MODIFY
+
+
+class TestTopicShapeEdges:
+
+    def test_five_segment_topic_without_region(self):
+        # The shape the firmware tier publishes; must not be skipped.
+        assert parse_meshtastic_topic("msh/2/e/LongFast/!aabbccdd") == ("LongFast", "e")
+
+    @pytest.mark.parametrize("topic", [
+        "foo/US/2/e/LongFast/!aabbccdd",     # not under msh/
+        "msh/US/2/e/LongFast/aabbccdd",      # gateway id without '!'
+        "msh/US/2/c/LongFast/!aabbccdd",     # unknown encoding
+        "msh/2/e/!aabbccdd",                 # too short
+    ])
+    def test_non_packet_topics_are_rejected(self, topic):
+        assert parse_meshtastic_topic(topic) is None
+

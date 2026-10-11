@@ -167,6 +167,16 @@ See [config.yaml](config.yaml) for a fully annotated example.
 >
 > **Unknown keys are rejected too** (since 0.5.0). A misspelled key such as `zerohop_channel:` used to merge in silently and leave the default in effect; floodgate now refuses to start and lists the keys it does recognise.
 
+**Every value is validated at startup** (since 0.6.0), and all problems are reported together:
+
+- Booleans must be unquoted YAML booleans. A quoted `"false"` is a truthy string, so `drop_enabled: "false"` used to turn drop **on**.
+- Ports must be integers from 1 to 65535; `grpc_max_workers` and `stats_interval_s` must be integers of at least 1.
+- `log_level` must be a standard level name and `log_format` must be `text` or `json` (either is case-insensitive, including `FLOODGATE_LOG_FORMAT`).
+- `drop_portnums` entries must be exact Meshtastic `PortNum` names; a typo such as `RANGETEST_APP` is rejected with a suggestion.
+- A config file named by `--config` or `FLOODGATE_CONFIG` must exist. Running on built-in defaults because of a wrong mount path would silently turn drop off. With neither set, the defaults are used.
+
+A configuration error exits with status 2 and a single `Configuration error:` line, no traceback.
+
 ### Zerohop
 
 The default zerohop list contains the eight standard Meshtastic public channel presets:
