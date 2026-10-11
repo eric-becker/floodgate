@@ -1,15 +1,22 @@
 # Pinned versions only stay safe if someone bumps them; Dependabot opens the
 # PRs and CI decides. The protobufs commit in scripts/download_protobufs.sh is
 # not covered and is bumped by hand.
+#
+# Updates are grouped (one PR per ecosystem per month) because main requires
+# branches to be up to date: separate PRs would each go stale as the others
+# merge.
 version: 2
 updates:
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: monthly
+    # Bump exact pins (requirements*.txt, ruff in pyproject.toml); leave
+    # pyproject's `>=` ranges alone unless a new release falls outside them.
+    versioning-strategy: increase-if-necessary
     groups:
-      grpc:
-        patterns: ["grpcio", "grpcio-tools", "protobuf"]
+      python:
+        patterns: ["*"]
 
   - package-ecosystem: docker
     directory: /
@@ -20,3 +27,6 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
