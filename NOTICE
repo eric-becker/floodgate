@@ -7,7 +7,7 @@ This product includes code generated from third-party interface definitions:
   Meshtastic protobufs -- https://github.com/meshtastic/protobufs
   Licensed under the Apache License, Version 2.0. The definitions are fetched
   at build time (scripts/download_protobufs.sh, at a pinned commit) and the
-  generated Python modules are included in the container image. The licence
+  generated Python modules are included in the container image. The license
   text is copied to protobufs/LICENSE by that script.
 
   EMQX ExHook protocol definition (proto/emqx/exhook.proto)

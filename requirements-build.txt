@@ -1,0 +1,4 @@
+# Build-only: generates the protobuf stubs in the image's builder stage and in
+# CI. Keep grpcio-tools at the same version as grpcio in requirements.txt;
+# Dependabot bumps both together (the "grpc" group).
+grpcio-tools==1.84.0

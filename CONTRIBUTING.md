@@ -93,7 +93,7 @@ Releases use semantic versioning. Before 1.0, a **minor** release may change the
 
 ### Steps
 
-1. In a PR, bump the version in all four places `scripts/check_version.sh` checks: `pyproject.toml`, `src/floodgate/__init__.py`, `charts/floodgate/Chart.yaml` (`appVersion`) and the image tag in `k8s/deployment.yaml`. Merge it.
+1. In a PR, bump the version in all four places `scripts/check_version.sh` checks: `pyproject.toml`, `src/floodgate/__init__.py`, `charts/floodgate/Chart.yaml` (`appVersion`) and the image tag in `k8s/deployment.yaml`. If anything under `charts/` changed, also bump the chart's own `version`. Merge it.
 2. Tag the merge commit:
    ```bash
    git checkout main && git pull
@@ -115,7 +115,7 @@ Releases use semantic versioning. Before 1.0, a **minor** release may change the
 
 ### Dependencies
 
-`requirements.txt` (the image's runtime dependencies) and the Dockerfile's base image are pinned exactly; Dependabot proposes monthly bumps for pip, Docker and GitHub Actions, and CI decides. `pyproject.toml` keeps looser ranges for source installs.
+`requirements.txt` (the image's runtime dependencies), `requirements-build.txt` (`grpcio-tools`, builder stage only) and the Dockerfile's base image are pinned exactly. CI installs with both requirements files as constraints, so the tests run against the versions the image ships. Dependabot proposes monthly bumps for pip, Docker and GitHub Actions, and CI decides. `pyproject.toml` keeps looser ranges for source installs, and pins ruff, which CI reads from there.
 
 ## Protobuf compatibility
 

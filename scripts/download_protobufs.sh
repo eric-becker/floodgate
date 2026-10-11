@@ -23,7 +23,7 @@ git -C "$WORK_DIR" init --quiet
 git -C "$WORK_DIR" fetch --quiet --depth=1 "$PROTO_REPO" "$PROTOBUFS_REF"
 git -C "$WORK_DIR" checkout --quiet FETCH_HEAD
 
-# Replace only what the generator reads (plus the licence), so files tracked
+# Replace only what the generator reads (plus the license), so files tracked
 # in this repo under the target directory are left alone.
 mkdir -p "$TARGET_DIR"
 rm -rf "$TARGET_DIR/meshtastic"

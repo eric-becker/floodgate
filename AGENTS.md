@@ -6,7 +6,7 @@
 MQTT anti-flood service for Meshtastic with two operations:
 
 - **Zero-hop** — set `MeshPacket.hop_limit` and `hop_start` to 0 in-flight, then deliver. Default for the standard public channel presets. A downlinking gateway shows the packet but never retransmits it on RF; private channels pass through untouched so they keep bridging MQTT and RF.
-- **Drop** — deny a publish entirely so EMQX never delivers it. Off by default; intended for portnum-based spam (e.g. `RANGE_TEST_APP` on the public channels, which only pre-2.8 firmware emits).
+- **Drop** — deny a publish entirely so EMQX never delivers it. Off by default; intended for portnum-based spam (e.g. `RANGE_TEST_APP` on the public channels, which only pre-2.8 firmware emits: 2.8 compiles the module out, meshtastic/firmware#11150).
 
 Drop runs *before* zero-hop. Both are evaluated per message via the EMQX ExHook gRPC interface.
 
@@ -20,7 +20,7 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru �
 |------|------|
 | `src/floodgate/exhook_server.py` | gRPC server; EMQX connects here. Maps process_message actions to ExHook responses. |
 | `src/floodgate/zerohop.py`       | Per-message pipeline: drop check → zerohop check → structured logging. |
-| `src/floodgate/config.py`        | Config loader, schema validation (rejects removed and unknown keys), policy helpers `should_zerohop` / `should_drop`. |
+| `src/floodgate/config.py`        | Config loader and validation (removed/unknown keys, every value's type and range, `PortNum` names, YAML errors — all as `ConfigError`), policy helpers `should_zerohop` / `should_drop`. |
 | `src/floodgate/decrypt.py`       | AES-128-CTR decryption with the Meshtastic default key (drop's portnum lookup needs this for `/e/` packets). |
 | `src/floodgate/portnum.py`       | Portnum extraction from `/e/` (decrypt + Data parse) and `/json/` payloads. |
 | `src/floodgate/log_setup.py`     | Logging formatter; text and JSON (Loki) modes. |
@@ -84,7 +84,7 @@ After startup, register the ExHook in EMQX (README, "Registering the ExHook").
 - Commits: conventional format — `feat:`, `fix:`, `docs:`, `test:`, `chore:`
 - PRs: squash-merge to main; delete branch after merge
 - Releases: bump the four version strings `scripts/check_version.sh` checks, merge, then `git tag vX.Y.Z && git push origin vX.Y.Z`. `ci.yml` runs every job on the tag and only then pushes the image and creates the GitHub release
-- Pinned on purpose: the protobufs commit (`PROTOBUFS_REF` in `scripts/download_protobufs.sh`), `requirements.txt`, the Dockerfile base image digest and ruff. Bump them in a PR; never unpin
+- Pinned on purpose: the protobufs commit (`PROTOBUFS_REF` in `scripts/download_protobufs.sh`), `requirements.txt` and `requirements-build.txt` (CI installs with them as constraints, so tests use the image's versions), the Dockerfile base image digest and ruff (`pyproject.toml`; CI reads it from there). Bump them in a PR; never unpin
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for full release workflow details
 
 ## Key Config Options

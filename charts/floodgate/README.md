@@ -43,7 +43,7 @@ The full default set lives in [values.yaml](values.yaml). Highlights:
 | `config.zerohop_enabled` | `true` | Master switch for the zero-hop modifier |
 | `config.zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` and `hop_start` zeroed |
 | `config.drop_enabled` | `false` | Master switch for the drop filter |
-| `config.drop_channels` | `"zerohop_channels"` | Inherits `zerohop_channels`, or a list, or `null` for all channels |
+| `config.drop_channels` | `"zerohop_channels"` | Inherits `zerohop_channels`, or a list. For **all channels** set `drop_channels: []` in a values file: Helm deletes a key set to `null` (floodgate then keeps the default scope), and `--set config.drop_channels={}` renders `[""]`, which matches nothing |
 | `config.drop_portnums` | `[]` | Exact `PortNum` names, e.g. `[RANGE_TEST_APP]`; unknown names are rejected at startup |
 | `config.grpc_max_workers` | `16` | gRPC thread-pool size. Match or exceed the broker's ExHook `pool_size`, or calls queue; a call past `request_timeout` counts as failed and is then **delivered unmodified**, silently losing zero-hop protection (not dropped — see README "ExHook failure policy") |
 | `config.log_format` | `"text"` | Set `"json"` for Loki/Grafana |

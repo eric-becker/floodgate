@@ -384,7 +384,7 @@ def process_message(topic: str, payload: bytes, config: dict) -> ProcessResult:
     except Exception as exc:
         stats.inc("errors")
         logger.error(
-            "Unhandled exception processing topic=%s: %s(%s)",
+            "Unhandled exception processing topic=%r: %s(%s)",
             topic,
             type(exc).__name__,
             exc,

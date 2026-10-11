@@ -199,7 +199,7 @@ To zero-hop every channel a gateway forwards (maximum enforcement), pass them al
 
 The drop filter denies a publish entirely — EMQX does not deliver it to subscribers, so it doesn't appear in MQTT consumers, dashboards, or chat logs. Drop runs *before* zero-hop; a dropped packet never reaches the zero-hop check.
 
-The motivating use case is portnum traffic that floods the standard public channels and isn't useful in MQTT downstream — for example, `RANGE_TEST_APP`. Firmware 2.8 removed the range test module entirely, so these come only from older nodes; firmware itself suppresses range-test uplink only when a gateway points at the default public broker, so on a private broker floodgate is the filter.
+The motivating use case is portnum traffic that floods the standard public channels and isn't useful in MQTT downstream — for example, `RANGE_TEST_APP`. Firmware 2.8 compiles the range test module out of every build ([meshtastic/firmware#11150](https://github.com/meshtastic/firmware/pull/11150); the source file remains, the global `MESHTASTIC_EXCLUDE_RANGETEST=1` excludes it), so these come only from older nodes; firmware itself suppresses range-test uplink only when a gateway points at the default public broker, so on a private broker floodgate is the filter.
 ```yaml
 drop_enabled: true
 drop_channels: "zerohop_channels"   # same scope as zero-hop
@@ -369,7 +369,7 @@ Per-message outcomes are logged at **INFO** — no special flags required. Field
 2026-10-11 01:53:16 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=1 noop=0 dropped=4 skipped=1050 errors=0 total=1197
 ```
 
-`hop_limit` and `hop_start` on `[ZEROHOP]` lines are the sender's original values; the delivered packet has both at 0. Field values are written on one line with control characters escaped, so a crafted topic cannot forge log lines.
+`hop_limit` and `hop_start` on `[ZEROHOP]` lines are the sender's original values; the delivered packet has both at 0. A value containing a space, `=`, quote, backslash or control character is double-quoted with those characters escaped, so a crafted topic cannot forge a log line or a `key=value` field.
 
 **JSON mode** (`log_format: json` or `FLOODGATE_LOG_FORMAT=json`); timestamps are UTC:
 ```json

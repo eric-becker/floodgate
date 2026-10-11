@@ -88,14 +88,24 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
             # channel list -- a wrong mount path must be loud.
             raise ConfigError(f"Config file {path} not found")
         logger.info("Loading config from %s", path)
-        with open(path) as f:
-            user_config = yaml.safe_load(f)
+        try:
+            with open(path) as f:
+                user_config = yaml.safe_load(f)
+        except yaml.YAMLError as exc:
+            raise ConfigError(f"Config file {path} is not valid YAML:\n{exc}") from None
+        except OSError as exc:
+            raise ConfigError(f"Config file {path} could not be read: {exc}") from None
         if user_config is None:
             user_config = {}
         if not isinstance(user_config, dict):
             raise ConfigError(
                 f"Config file {path} must be a mapping of keys to values; "
                 f"got {type(user_config).__name__}"
+            )
+        bad_keys = [k for k in user_config if not isinstance(k, str)]
+        if bad_keys:
+            raise ConfigError(
+                f"Config file {path}: keys must be strings; got {', '.join(map(repr, bad_keys))}"
             )
         _reject_bad_keys(set(user_config), source=str(path))
         config.update(user_config)
@@ -113,7 +123,7 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
 
 
 def _validate_values(config: dict[str, Any], errors: list[str]) -> None:
-    """Type- and range-check every key, normalising where a spelling is
+    """Type- and range-check every key, normalizing where a spelling is
     unambiguous (log_level case, log_format case). Appends to `errors`.
 
     Booleans must be real YAML booleans: a quoted "false" is a truthy string,
@@ -136,7 +146,7 @@ def _validate_values(config: dict[str, Any], errors: list[str]) -> None:
 
     # FLOODGATE_LOG_FORMAT is convenient in container/k8s environments where
     # editing the mounted config.yaml is awkward.
-    env_fmt = os.environ.get("FLOODGATE_LOG_FORMAT")
+    env_fmt = os.environ.get("FLOODGATE_LOG_FORMAT") or None  # empty means unset
     fmt, label = (
         (env_fmt, "FLOODGATE_LOG_FORMAT")
         if env_fmt is not None

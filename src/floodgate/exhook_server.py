@@ -54,7 +54,8 @@ class HookProviderServicer:
 
     def OnMessagePublish(self, request, context):
         msg = request.message
-        logger.debug("OnMessagePublish: topic=%s bytes=%d", msg.topic, len(msg.payload))
+        # %r: the topic is publisher-controlled and must not break the log line.
+        logger.debug("OnMessagePublish: topic=%r bytes=%d", msg.topic, len(msg.payload))
         result = process_message(msg.topic, msg.payload, self.config)
         logger.debug("OnMessagePublish: action=%s", result.action)
 

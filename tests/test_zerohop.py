@@ -1048,6 +1048,14 @@ class TestFailOpenSafetyNet:
         assert _delta(before, "errors") == 1
         assert any("boom" in r.getMessage() for r in caplog.records)
 
+    def test_error_line_escapes_the_topic(self, caplog):
+        config = _make_config(zerohop_channels=["LongFast"])
+        with patch("floodgate.zerohop._process_message_inner", side_effect=RuntimeError("boom")):
+            with caplog.at_level(logging.ERROR, logger="floodgate.zerohop"):
+                process_message("msh/US/2/e/LongFast/!a\nFORGED", b"x", config)
+        message = next(r.getMessage() for r in caplog.records if "boom" in r.getMessage())
+        assert "\n" not in message
+
 
 class TestStatsAttribution:
     """Each outcome increments exactly its own counter -- /health and the

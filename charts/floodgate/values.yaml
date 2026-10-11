@@ -32,7 +32,7 @@ config:
   drop_portnums: []
   grpc_port: 9000
   # Set to match or exceed the broker's ExHook pool_size, or calls queue behind
-  # busy workers. Not a throughput dial — per-message work is GIL-serialised.
+  # busy workers. Not a throughput dial — per-message work is GIL-serialized.
   grpc_max_workers: 16
   health_port: 8080
   topic_filter: "msh/#"
