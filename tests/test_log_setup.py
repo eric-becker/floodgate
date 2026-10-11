@@ -459,17 +459,37 @@ class TestTextFormatterSnapshots:
             event="message",
             outcome="passthru",
             topic="msh/US/2/e/X\n2026-01-01 00:00:00 INFO [DROPPED] forged/!1",
-            channel="X\r\x1b[31mred",
+            channel="X\r\x1b[31mred\u2028",
         )
         assert "\n" not in output and "\r" not in output and "\x1b" not in output
-        assert "topic=msh/US/2/e/X\\n2026-01-01" in output
-        assert "channel=X\\r\\x1b[31mred" in output
+        assert "\u2028" not in output
+        assert 'topic="msh/US/2/e/X\\n2026-01-01 00:00:00 INFO [DROPPED] forged/!1"' in output
+        assert 'channel="X\\r\\x1b[31mred\\u2028"' in output
 
-    def test_non_ascii_channel_names_are_kept(self):
+    def test_spaces_and_equals_cannot_forge_fields(self):
         output = self._format_text(
-            "passthru", event="message", outcome="passthru", channel="Café📡"
+            "passthru",
+            event="message",
+            outcome="passthru",
+            topic="msh/US/2/e/LongFast/!ab x=1 outcome=dropped",
         )
-        assert "channel=Café📡" in output
+        assert 'topic="msh/US/2/e/LongFast/!ab x=1 outcome=dropped"' in output
+
+    def test_backslash_and_quote_are_escaped(self):
+        # A literal backslash-n typed into a topic must not read like an
+        # escaped newline, and a quote must not close the value.
+        output = self._format_text("passthru", event="message", outcome="passthru", topic='a\\nb"c')
+        assert 'topic="a\\\\nb\\"c"' in output
+
+    def test_plain_values_stay_unquoted(self):
+        output = self._format_text(
+            "passthru",
+            event="message",
+            outcome="passthru",
+            topic="msh/US/2/e/LongFast/!aabbccdd",
+            channel="Café📡",
+        )
+        assert "topic=msh/US/2/e/LongFast/!aabbccdd channel=Café📡" in output
 
 
 class TestJsonTimestampIsUtc:

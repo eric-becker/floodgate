@@ -35,6 +35,7 @@ def pytest_sessionfinish(session, exitstatus):
     reporter = session.config.pluginmanager.get_plugin("terminalreporter")
     skipped = len(reporter.stats.get("skipped", [])) if reporter else 0
     if skipped:
+        reporter.ensure_newline()
         reporter.write_line(
             f"FLOODGATE_NO_SKIPS=1: {skipped} test(s) skipped; failing the run.", red=True
         )

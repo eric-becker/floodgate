@@ -496,7 +496,7 @@ class TestValueValidation:
         with pytest.raises(ConfigError, match="stats_interval_s"):
             _load(tmp_path, {"stats_interval_s": value})
 
-    def test_log_level_normalised(self, tmp_path):
+    def test_log_level_normalized(self, tmp_path):
         assert _load(tmp_path, {"log_level": "debug"})["log_level"] == "DEBUG"
 
     @pytest.mark.parametrize("value", ["VERBOSE", "", True, None, 10])
@@ -504,7 +504,7 @@ class TestValueValidation:
         with pytest.raises(ConfigError, match="log_level"):
             _load(tmp_path, {"log_level": value})
 
-    def test_log_format_normalised(self, tmp_path):
+    def test_log_format_normalized(self, tmp_path):
         assert _load(tmp_path, {"log_format": "JSON"})["log_format"] == "json"
 
     @pytest.mark.parametrize("value", ["xml", "", None, True])
@@ -560,3 +560,30 @@ class TestDropPortnumNames:
         pytest.importorskip("meshtastic")
         cfg = _load(tmp_path, {"drop_portnums": ["RANGE_TEST_APP", "DETECTION_SENSOR_APP"]})
         assert cfg["_drop_portnums_set"] == {"RANGE_TEST_APP", "DETECTION_SENSOR_APP"}
+
+
+class TestUnreadableConfigIsAConfigError:
+    """Every config problem surfaces as ConfigError, so the CLI prints one
+    line and exits 2 instead of a traceback."""
+
+    def test_yaml_syntax_error(self, tmp_path):
+        with pytest.raises(ConfigError, match="not valid YAML"):
+            _load(tmp_path, "drop_enabled: [\n")
+
+    @pytest.mark.parametrize("text", ["1: x\n", "1: x\nfoo: y\n", "true: 1\n"])
+    def test_non_string_keys(self, tmp_path, text):
+        with pytest.raises(ConfigError, match="keys must be strings"):
+            _load(tmp_path, text)
+
+    def test_unhashable_key(self, tmp_path):
+        with pytest.raises(ConfigError, match="not valid YAML"):
+            _load(tmp_path, "? [a, b]\n: 1\n")
+
+    def test_directory_path(self, tmp_path):
+        with pytest.raises(ConfigError, match="not found"):
+            load_config(str(tmp_path))
+
+    def test_empty_log_format_env_is_ignored(self, monkeypatch):
+        monkeypatch.delenv("FLOODGATE_CONFIG", raising=False)
+        monkeypatch.setenv("FLOODGATE_LOG_FORMAT", "")
+        assert load_config()["log_format"] == "text"

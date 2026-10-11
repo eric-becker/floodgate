@@ -7,10 +7,10 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-# grpcio-tools generates the stubs; it is build-only and never reaches the
-# runtime stage. Keep it at the same version as grpcio.
-RUN pip install --no-cache-dir -r requirements.txt grpcio-tools==1.84.0
+COPY requirements.txt requirements-build.txt ./
+# grpcio-tools (requirements-build.txt) generates the stubs; it is build-only
+# and never reaches the runtime stage.
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-build.txt
 
 # download + generate protobufs (at the commit pinned in the script)
 COPY scripts/download_protobufs.sh scripts/

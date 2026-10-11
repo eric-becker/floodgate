@@ -55,9 +55,9 @@ ruff format --check .      # `ruff format .` to fix
 
 ### Integration testing
 
-The integration harness (`scripts/run-integration.sh`) brings up a full Docker Compose stack — EMQX + floodgate + an ExHook auto-registration container + a Python test-driver — on an isolated bridge network and runs end-to-end checks for `drop`, `zerohop`, `passthru`, `noop`, and `custom-key channel passthru`. The test-driver crafts real Meshtastic `ServiceEnvelope` protobufs (using the same `meshtastic` Python library the firmware uses internally), so each case exercises the exact wire format floodgate sees in production.
+The integration harness (`scripts/run-integration.sh`) brings up a full Docker Compose stack — EMQX, floodgate, an ExHook registration container, a real `meshtasticd` node (`mesh-sim`) and a Python test-driver — on an isolated bridge network, and runs four passes: `default` (zerohop, drop, passthru, noop, custom-key-not-dropped, json-zerohop), `hook-down` (floodgate stopped: fails open), `recovery`, and `firmware` (the real node accepts zero-hopped packets; traceroute has no ghost hops). The test-driver builds `ServiceEnvelope`s with the `meshtastic` Python package's generated protobufs — the same schema as firmware — so each case exercises the wire format floodgate sees in production. See [tests/integration/README.md](tests/integration/README.md) for what each pass proves.
 
-Each case verifies BOTH what the subscriber received (delivered MQTT bytes) AND floodgate's `/health` stats — a behavior change with no stat increment, or a stat increment with no delivery effect, both fail the case. One PASS or FAIL line is printed per case.
+The `default` cases check both what the subscriber received and floodgate's `/health` deltas; `hook-down` checks EMQX's ExHook `metrics.failed`, `recovery` checks delivered hop fields, and `firmware` checks what the node accepted. One PASS or FAIL line is printed per case.
 
 Requirements: `docker` and `bash`. The `pytest` suite never runs the harness — it's opt-in via the script.
 
@@ -93,7 +93,7 @@ Releases use semantic versioning. Before 1.0, a **minor** release may change the
 
 ### Steps
 
-1. In a PR, bump the version in all four places `scripts/check_version.sh` checks: `pyproject.toml`, `src/floodgate/__init__.py`, `charts/floodgate/Chart.yaml` (`appVersion`) and the image tag in `k8s/deployment.yaml`. Merge it.
+1. In a PR, bump the version in all four places `scripts/check_version.sh` checks: `pyproject.toml`, `src/floodgate/__init__.py`, `charts/floodgate/Chart.yaml` (`appVersion`) and the image tag in `k8s/deployment.yaml`. If anything under `charts/` changed, also bump the chart's own `version`. Merge it.
 2. Tag the merge commit:
    ```bash
    git checkout main && git pull
@@ -115,7 +115,7 @@ Releases use semantic versioning. Before 1.0, a **minor** release may change the
 
 ### Dependencies
 
-`requirements.txt` (the image's runtime dependencies) and the Dockerfile's base image are pinned exactly; Dependabot proposes monthly bumps for pip, Docker and GitHub Actions, and CI decides. `pyproject.toml` keeps looser ranges for source installs.
+`requirements.txt` (the image's runtime dependencies), `requirements-build.txt` (`grpcio-tools`, builder stage only) and the Dockerfile's base image are pinned exactly. CI installs with both requirements files as constraints, so the tests run against the versions the image ships. Dependabot proposes monthly bumps for pip, Docker and GitHub Actions, and CI decides. `pyproject.toml` keeps looser ranges for source installs, and pins ruff, which CI reads from there.
 
 ## Protobuf compatibility
 

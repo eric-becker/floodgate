@@ -1,7 +1,8 @@
 """Container smoke tests — build the image and verify it starts correctly.
 
-These tests require a Docker daemon and are skipped in unit-test runs.
-Run explicitly with:  pytest -m smoke -v
+These tests require a Docker daemon. They are not skipped without one -- they
+fail -- so unit-test runs exclude this file with --ignore.
+Run explicitly with:  pytest tests/test_container_smoke.py -m smoke -v
 
 In CI this runs as a separate job (see .github/workflows/ci.yml) after the
 unit tests pass, so a container startup failure is clearly distinguished from
@@ -68,13 +69,15 @@ def built_image(tmp_path_factory):
 @pytest.fixture(scope="session")
 def running_container(built_image, tmp_path_factory):
     """Start the container and yield its container ID; stop + remove on teardown."""
+    # A previous run that failed mid-start leaves the fixed-name container behind.
+    _docker("rm", "-f", "floodgate-smoke")
     result = _docker(
         "run",
         "-d",
         "--name",
         "floodgate-smoke",
         "-p",
-        f"{HEALTH_PORT}:8080",
+        f"127.0.0.1:{HEALTH_PORT}:8080",
         built_image,
     )
     if result.returncode != 0:
@@ -87,6 +90,7 @@ def running_container(built_image, tmp_path_factory):
     except TimeoutError as exc:
         # Capture container logs to aid diagnosis before failing
         logs = _docker("logs", container_id).stdout
+        _docker("rm", "-f", container_id)
         pytest.fail(f"{exc}\nContainer logs:\n{logs}")
 
     yield container_id

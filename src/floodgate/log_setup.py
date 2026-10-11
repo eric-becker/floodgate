@@ -40,18 +40,31 @@ _OUTCOME_TAGS = {
 }
 
 
-def _escape(value) -> str:
-    """Render a field value on one line.
+_NEEDS_QUOTING = frozenset(' "\\=')
 
-    Topics and channel names are publisher-controlled, so a newline or ANSI
-    escape could otherwise forge a line that looks like a floodgate outcome.
-    Control characters are written as Python escapes; printable non-ASCII
-    (channel names in any script) is kept as-is.
+
+def _escape(value) -> str:
+    """Render a field value so it cannot break the key=value line format.
+
+    Topics and channel names are publisher-controlled. A newline could forge
+    a whole log line, and a space plus `key=value` could forge fields inside
+    one. Plain values are written bare; anything with a space, quote,
+    backslash, `=` or a non-printable character is double-quoted with those
+    characters escaped. Printable non-ASCII (channel names in any script) is
+    kept as-is.
     """
     text = str(value)
-    if text.isprintable():
+    if text and text.isprintable() and not _NEEDS_QUOTING.intersection(text):
         return text
-    return "".join(c if c.isprintable() else repr(c)[1:-1] for c in text)
+    out = []
+    for c in text:
+        if c in '"\\':
+            out.append("\\" + c)
+        elif c.isprintable():
+            out.append(c)
+        else:
+            out.append(repr(c)[1:-1])
+    return '"' + "".join(out) + '"'
 
 
 class StructuredTextFormatter(logging.Formatter):

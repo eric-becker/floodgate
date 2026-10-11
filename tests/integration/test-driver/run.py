@@ -1,17 +1,20 @@
 """Integration test driver.
 
-Runs each integration case sequentially. For every case:
-  1. Crafts a Meshtastic ServiceEnvelope (or borrows one from meshtasticd).
+Runs one case set (CASE_SET) sequentially. For every case:
+  1. Crafts a Meshtastic ServiceEnvelope (or a JSON packet).
   2. Publishes it via MQTT to a topic whose channel name fits the case.
   3. Waits briefly for floodgate to process and EMQX to deliver.
-  4. Asserts on (a) what the bound subscriber received and (b) floodgate's
-     /health stats, then prints one 'PASS: <case>' or 'FAIL: <case>: <reason>' line.
+  4. Asserts on what the bound subscriber received, plus, depending on the
+     set: floodgate's /health stats (default), EMQX ExHook metrics
+     (hook-down), or what a real meshtasticd node accepted (firmware).
+     Prints one 'PASS: <case>' or 'FAIL: <case>: <reason>' line.
 
 Exits 0 iff every case passed.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -107,6 +110,11 @@ class Subscriber:
             client_id="floodgate-test-driver-sub",
         )
         self._client.on_message = self._on_message
+        self._client.on_subscribe = self._on_subscribe
+        self._subscribed = threading.Event()
+
+    def _on_subscribe(self, _client, _userdata, _mid, _reason_codes, _properties):
+        self._subscribed.set()
 
     def _on_message(self, _client, _userdata, msg):
         with self._lock:
@@ -116,8 +124,9 @@ class Subscriber:
         self._client.connect(self._host, self._port, keepalive=30)
         self._client.subscribe("msh/#", qos=0)
         self._client.loop_start()
-        # Give EMQX a moment to register the subscription before we publish.
-        time.sleep(0.5)
+        # Publish nothing until EMQX has acknowledged the subscription.
+        if not self._subscribed.wait(timeout=10):
+            raise RuntimeError("EMQX did not acknowledge the msh/# subscription")
 
     def stop(self):
         self._client.loop_stop()
@@ -281,7 +290,7 @@ def _packet_id_of(payload: bytes) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# Test-case orchestration scaffold (cases filled in later tasks)
+# Test cases
 # ---------------------------------------------------------------------------
 
 
@@ -421,51 +430,104 @@ def case_noop(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
-def case_custom_key_passthru(pub: Publisher, sub: Subscriber) -> Outcome:
-    """Channel NOT in zerohop_channels, encrypted with a key floodgate doesn't have.
+def case_custom_key_not_dropped(pub: Publisher, sub: Subscriber) -> Outcome:
+    """A custom-keyed packet on a channel IN the drop scope is not dropped.
 
-    floodgate cannot decrypt the inner Data, so it cannot read the portnum.
-    The drop filter must therefore NOT fire even if drop_portnums would
-    otherwise match. Because the channel is not in zerohop_channels, the
-    packet is delivered byte-identically.
+    floodgate decrypts with the default key, so it cannot read this packet's
+    portnum (RANGE_TEST_APP, which drop_portnums lists) and must deliver it.
+    The channel must be in drop scope -- on an out-of-scope channel drop
+    never fires anyway and the case would prove nothing. LongFast is also a
+    zerohop channel, so the packet is zero-hopped with its ciphertext intact.
     """
-    name = "custom-key-passthru"
+    name = "custom-key-not-dropped"
     pre = health_stats()
     pkt_id = 0xA5A5A5A5
     body = build_envelope(
-        channel="PrivateNet",
-        portnum=portnums_pb2.PortNum.RANGE_TEST_APP,  # would match drop_portnums if readable
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.RANGE_TEST_APP,  # would be dropped if readable
         payload=b"opaque",
         packet_id=pkt_id,
         from_node=0xDEADBEEF,
         hop_limit=3,
         key=CUSTOM_KEY,
     )
-    pub.publish(topic_for("PrivateNet"), body)
+    pub.publish(topic_for("LongFast"), body)
     time.sleep(SETTLE_SECONDS)
 
     delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
     if not delivered:
-        return Outcome(name, False, "packet was not delivered to subscriber")
-    if delivered[-1].payload != body:
+        return Outcome(name, False, "packet was not delivered; drop fired on an unreadable portnum")
+    sent, got = mqtt_pb2.ServiceEnvelope(), mqtt_pb2.ServiceEnvelope()
+    sent.ParseFromString(body)
+    got.ParseFromString(delivered[-1].payload)
+    if got.packet.encrypted != sent.packet.encrypted:
+        return Outcome(name, False, "ciphertext changed in transit")
+    if (got.packet.hop_limit, got.packet.hop_start) != (0, 0):
         return Outcome(
-            name, False, "delivered payload was modified; passthru must be byte-identical"
+            name,
+            False,
+            f"hops not zeroed (limit={got.packet.hop_limit} start={got.packet.hop_start})",
         )
 
     post = health_stats()
-    if post.get("passthru", 0) - pre.get("passthru", 0) < 1:
-        return Outcome(name, False, "stats.passthru did not increment")
     if post.get("dropped", 0) - pre.get("dropped", 0) > 0:
-        return Outcome(
-            name, False, "stats.dropped incremented; drop must not fire on unreadable portnum"
-        )
+        return Outcome(name, False, "stats.dropped incremented")
+    if post.get("zerohop", 0) - pre.get("zerohop", 0) < 1:
+        return Outcome(name, False, "stats.zerohop did not increment")
+    return Outcome(name)
+
+
+def case_json_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
+    """A JSON-topic packet on a zerohop channel has all three hop fields zeroed."""
+    name = "json-zerohop"
+    pre = health_stats()
+    pkt_id = 0xA6A6A6A6
+    body = json.dumps(
+        {
+            "id": pkt_id,
+            "from": 0xDEADBEEF,
+            "to": 0xFFFFFFFF,
+            "channel": 0,
+            "type": "text",
+            "payload": {"text": "hello-json"},
+            "sender": "!00000001",
+            "hop_start": 3,
+            "hops_away": 1,
+        }
+    ).encode()
+    topic = "msh/US/2/json/LongFast/!00000001"
+    pub.publish(topic, body)
+    time.sleep(SETTLE_SECONDS)
+
+    delivered = []
+    for m in sub.snapshot():
+        if m.topic != topic:
+            continue
+        try:
+            data = json.loads(m.payload)
+        except ValueError:
+            continue
+        if data.get("id") == pkt_id:
+            delivered.append(data)
+    if not delivered:
+        return Outcome(name, False, "packet was not delivered")
+    data = delivered[-1]
+    hops = (data.get("hop_limit"), data.get("hop_start"), data.get("hops_away"))
+    if hops != (0, 0, 0):
+        return Outcome(name, False, f"hop_limit/hop_start/hops_away = {hops}, expected all 0")
+    if data.get("payload") != {"text": "hello-json"}:
+        return Outcome(name, False, "payload did not survive intact")
+
+    post = health_stats()
+    if post.get("zerohop", 0) - pre.get("zerohop", 0) < 1:
+        return Outcome(name, False, "stats.zerohop did not increment")
     return Outcome(name)
 
 
 def case_hook_down_fails_open(pub: Publisher, sub: Subscriber) -> Outcome:
     """floodgate unreachable: the packet is delivered UNMODIFIED, not denied.
 
-    This is the case the deployment docs got backwards, so it is worth stating
+    This is the case that is easy to get backwards, so it is worth stating
     precisely. The ExHook is registered `failed_action: deny`, which reads like
     "if floodgate is down, refuse the publish". It does not behave that way for
     `message.publish`. When the gRPC server is unreachable the call *raises*
@@ -635,7 +697,7 @@ def case_firmware_accepts_zerohopped(pub_: Publisher, sub: Subscriber) -> Outcom
     otherwise the packet is from pre-2.3.0 firmware and is dropped outright,
     post-decode, before any module or phone sees it.
 
-    So a packet can be structurally perfect, pass all 227 unit tests, and still
+    So a packet can be structurally perfect, pass every unit test, and still
     be silently discarded on arrival. Only a real node can say otherwise.
 
     Deliberately one portnum: portnum handling is covered at the unit level,
@@ -686,6 +748,8 @@ def case_firmware_traceroute_no_ghost_hops(pub_: Publisher, sub: Subscriber) -> 
 
     Publishing an ordinary 3-hop packet and letting floodgate do the zeroing is
     the point: revert to zeroing hop_limit only and this fails with 3 ghosts.
+    An unmodified 3/3 packet would show no ghosts either, so the case first
+    checks that the request really was zero-hopped on the bus.
     """
     name = "firmware-traceroute-no-ghost-hops"
     try:
@@ -708,6 +772,14 @@ def case_firmware_traceroute_no_ghost_hops(pub_: Publisher, sub: Subscriber) -> 
     )
     pub_.publish(FW_TOPIC, body)
     time.sleep(10)
+
+    requests_seen = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not requests_seen:
+        return Outcome(name, False, "the traceroute request was not delivered")
+    request = requests_seen[-1].payload
+    hops = (_parse_hop_limit(request), _parse_hop_start(request))
+    if hops != (0, 0):
+        return Outcome(name, False, f"request not zero-hopped (limit, start = {hops})")
 
     routes = []
     for m in sub.snapshot():
@@ -746,7 +818,8 @@ CASE_SETS: dict[str, list] = {
         case_drop,
         case_passthru,
         case_noop,
-        case_custom_key_passthru,
+        case_custom_key_not_dropped,
+        case_json_zerohop,
     ],
     # Run by scripts/run-integration.sh with floodgate deliberately stopped.
     "hook-down": [case_hook_down_fails_open],

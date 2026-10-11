@@ -2,7 +2,7 @@
 
 Zero-hop MQTT anti-flood service for self-hosted [EMQX](https://www.emqx.io/) brokers serving [Meshtastic](https://meshtastic.org/) networks. Intercepts MQTT PUBLISH events via [EMQX ExHook](https://www.emqx.io/docs/en/latest/extensions/exhook.html) (gRPC) and zeros both `MeshPacket.hop_limit` and `hop_start` in-flight before delivery to subscribers, preventing LoRa rebroadcast floods when gateways downlink MQTT packets.
 
-Tested against EMQX 6.2.0 (ExHook v3 proto, EMQX 5.9.0+). CI runs a real Meshtastic firmware node (`meshtasticd`) against the output; 0.5.0 was also verified on hardware with a Station G2 gateway on firmware 2.8.1.
+Tested against EMQX 6.2.0 (ExHook v3 proto, EMQX 5.9.0+). CI runs a real Meshtastic firmware node (`meshtasticd`) against floodgate's output, and the zero-hop and drop behavior was verified on hardware (a Station G2 gateway and an nRF52 node on firmware 2.8.1).
 
 ## Why
 
@@ -20,7 +20,7 @@ The point is selective: zero-hop the public channels, whose statewide noise, tel
 Gateway → EMQX → [ExHook gRPC] → floodgate → modified payload → EMQX → Subscribers
 ```
 
-Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the zeroed packet transparently, including analytics tools. Anything that computes hops as `hop_start - hop_limit` (Malla, for example) shows zero-hopped packets as 0 hops; the sender's original values survive only in floodgate's own log. Meshtastic gateways use the protobuf (`/e/`) topic for LoRa downlink. The JSON (`/json/`) topic is a human-readable mirror that some clients publish alongside for monitoring tools like MQTT Explorer — floodgate zero-hops both for consistency.
+Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the zeroed packet transparently, including analytics tools. Anything that computes hops as `hop_start - hop_limit` (Malla, for example) shows zero-hopped packets as 0 hops; the sender's original values survive only in floodgate's own log. Meshtastic gateways downlink only the protobuf (`/e/`) topic. The JSON (`/json/`) topic is a human-readable mirror that firmware before 2.8 could publish for monitoring tools — floodgate zero-hops both for consistency.
 
 ```
 Before:  hop_limit: 3  hop_start: 3
@@ -36,7 +36,7 @@ What a downlinking gateway then does with each kind of packet (observed on firmw
 | Zero-hopped channel (`hop_limit: 0`) | Shown, as 0 hops | **No** |
 | Any other channel (e.g. `hop_limit: 3`) | Shown | Yes, with `hop_limit` decremented |
 
-So zero-hopped traffic reaches the gateway's own user and stops there; it never reaches RF neighbours.
+So zero-hopped traffic reaches the gateway's own user and stops there; it never reaches RF neighbors.
 
 See [Meshtastic Mesh Algorithm](https://meshtastic.org/docs/overview/mesh-algo/) for details on `hop_limit` and `hop_start`.
 
@@ -48,10 +48,10 @@ Each message produces one outcome:
 | `zerohop` | Channel in `zerohop_channels`, `hop_limit > 0` — zeroed and delivered |
 | `noop` | Channel in `zerohop_channels`, already `hop_limit=0` — delivered unchanged |
 | `passthru` | Channel not in `zerohop_channels` (or zerohop disabled) — delivered unchanged |
-| `warn` | Payload parse failure — delivered unchanged (counted as `errors` in stats) |
+| `warn` | Payload on a zero-hop channel failed to parse — delivered unchanged, logged at WARNING, counted as `errors` |
 | `skipped` | Non-packet topic (map report, stat, etc.) — silently ignored |
 
-The drop filter runs **before** zerohop. A packet matching both is reported as `dropped`.
+The drop filter runs **before** zero-hop. A packet matching both is reported as `dropped`. An unexpected internal error is logged with a traceback, counted as `errors`, and the message is delivered unchanged — floodgate never drops a packet because of its own bug.
 
 ## Deployment
 
@@ -60,55 +60,53 @@ The drop filter runs **before** zerohop. A packet matching both is reported as `
 If you already have EMQX running, run floodgate as a standalone container on the same host. Images are published to GHCR for amd64 and arm64:
 
 ```bash
-curl -fsSLo my-config.yaml https://raw.githubusercontent.com/eric-becker/floodgate/main/config.yaml   # edit to taste
+curl -fsSLo my-config.yaml https://raw.githubusercontent.com/eric-becker/floodgate/v0.6.0/config.yaml   # edit to taste
 docker run -d \
   --name floodgate \
   --restart unless-stopped \
   -v "$(pwd)/my-config.yaml:/app/config.yaml:ro" \
   -p 127.0.0.1:9000:9000 \
-  ghcr.io/eric-becker/floodgate:0.5.0
+  ghcr.io/eric-becker/floodgate:0.6.0
 ```
 
-**Pin a version tag.** `latest` is rebuilt on every push to `main`, and its digest differs from the tagged build of the same commit. Read the release notes before bumping: config keys have changed between minor versions, and floodgate refuses to start on a key it doesn't recognise.
+**Pin a version tag, and fetch `config.yaml` from the same tag.** `latest` is rebuilt on every push to `main`, and its digest differs from the tagged build of the same commit. floodgate refuses to start on a config key it doesn't recognize, so a `config.yaml` from `main` can stop an older image from starting. Read the release notes before bumping: config keys have changed between minor versions.
 
-**Port `9000` is unauthenticated gRPC.** Docker-published ports bypass host firewalls such as ufw, so publish it on loopback or a private address, never `0.0.0.0`. If EMQX also runs in Docker, put both on one Docker network and skip `-p` entirely. To build from source instead, `docker build -t floodgate .` downloads the protobufs during the build.
+**Port `9000` is unauthenticated gRPC.** Docker-published ports bypass host firewalls such as ufw, so publish it on loopback or a private address, never `0.0.0.0`. If EMQX also runs in Docker, put both on one Docker network and skip `-p` entirely. To build from source instead, `docker build -t floodgate .` fetches the protobufs at their pinned commit during the build.
 
-Then register floodgate as an ExHook in EMQX. Get an API token first:
+Then [register the ExHook](#registering-the-exhook).
+
+### Registering the ExHook
+
+floodgate does nothing until EMQX calls it. Register it once per broker. The same steps apply to every install method; only the URL differs.
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:18083/api/v5/login \
+EMQX=http://localhost:18083          # EMQX REST API
+TOKEN=$(curl -s -X POST "$EMQX/api/v5/login" \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin","password":"your_password"}' | jq -r .token)
-```
+  -d '{"username":"admin","password":"<dashboard password>"}' | jq -r .token)
 
-Register the ExHook (replace `YOUR_HOST_IP` with the IP floodgate is reachable on from EMQX):
-
-```bash
-curl -X POST http://localhost:18083/api/v5/exhooks \
+curl -s -X POST "$EMQX/api/v5/exhooks" \
   -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "floodgate",
-    "url": "http://YOUR_HOST_IP:9000",
+    "url": "http://<floodgate address>:9000",
     "auto_reconnect": "5s",
-    "failed_action": "deny"
+    "failed_action": "ignore",
+    "enable": true
   }'
 ```
 
-If floodgate is on the same Docker network as EMQX, use the container name instead of an IP:
-`"url": "http://floodgate:9000"`
+`<floodgate address>` is wherever EMQX can reach floodgate: the container name on a shared Docker network (`floodgate`), the Service DNS name in Kubernetes (`floodgate.<namespace>.svc` with the chart), or a host IP. Keep `auto_reconnect` short; it bounds how long protection stays off after floodgate restarts. `failed_action` makes no practical difference for `message.publish` — see [ExHook failure policy](#exhook-failure-policy).
 
-See [ExHook failure policy](#exhook-failure-policy): for `message.publish`, `deny` and `ignore` behave
-identically — floodgate fails open either way.
-
-Verify registration in the EMQX dashboard under **Management → ExHook** or:
+Verify, in the dashboard under **Management → ExHook** or with:
 
 ```bash
-curl -s http://localhost:18083/api/v5/exhooks/floodgate \
-  -H "Authorization: Bearer $TOKEN" | jq '{enable, nodes: [.node_status[].status]}'
+curl -s "$EMQX/api/v5/exhooks/floodgate" -H "Authorization: Bearer $TOKEN" \
+  | jq '{enable, failed: .metrics.failed, nodes: [.node_status[].status]}'
 ```
 
-Expect `enable: true` and every node `connected`. EMQX 6 reports status per node under `node_status`; there is no top-level `status` field, so `jq .status` prints `null` even when the hook is working. floodgate also logs `ExHook connected: EMQX <version>` when EMQX loads it.
+Expect `enable: true` and every node `connected`. EMQX 6 reports status per node under `node_status`; there is no top-level `status` field, so `jq .status` prints `null` even when the hook is working. floodgate logs `ExHook connected: EMQX <version>` when EMQX loads it — that line, not the container starting, is the proof it is intercepting.
 
 ### Docker Compose (floodgate + EMQX together)
 
@@ -118,7 +116,7 @@ cd floodgate
 docker compose up --build -d
 ```
 
-After startup, register the ExHook per the [Deployment](#deployment) instructions above. This stack is for local evaluation: it publishes the EMQX dashboard and floodgate's health port on all interfaces.
+After startup, [register the ExHook](#registering-the-exhook) with the URL `http://floodgate:9000`. This stack is for local evaluation only: it publishes MQTT (1883), the EMQX dashboard (18083) and floodgate's health port on all interfaces.
 
 ### Kubernetes (Helm)
 
@@ -126,22 +124,24 @@ After startup, register the ExHook per the [Deployment](#deployment) instruction
 helm install floodgate ./charts/floodgate -n floodgate --create-namespace
 ```
 
-See [charts/floodgate/](charts/floodgate/) for the full values reference. The chart renders a Deployment with rolling updates, a ClusterIP Service, ConfigMap, ServiceAccount, and an optional PodDisruptionBudget; ConfigMap changes trigger automatic rolling restarts via a checksum annotation. Register the ExHook at `http://floodgate.floodgate.svc:9000` after install.
+See [charts/floodgate/](charts/floodgate/) for the full values reference. The chart renders a Deployment with rolling updates, a ClusterIP Service, ConfigMap, ServiceAccount, and an optional PodDisruptionBudget; ConfigMap changes trigger automatic rolling restarts via a checksum annotation. Then [register the ExHook](#registering-the-exhook) at `http://floodgate.floodgate.svc:9000`.
 
-The flat manifests in [k8s/](k8s/) are still present for `kubectl apply -f` users but are deprecated in favour of the chart.
+The flat manifests in [k8s/](k8s/) are still present for `kubectl apply -f` users but are deprecated in favor of the chart.
 
 ### Source install
 
-**Prerequisites:** Python 3.11+, `protoc`, `grpc_tools`
+**Prerequisites:** Python 3.11+ and `git`.
 
 ```bash
-./scripts/download_protobufs.sh   # fetch Meshtastic protobufs (Apache 2.0, not bundled)
-./scripts/generate_protos.sh      # generate Python stubs
-pip install -e ".[dev]"
+pip install -e ".[dev]"            # first: provides grpc_tools for the next step
+./scripts/download_protobufs.sh    # Meshtastic protobufs at the pinned commit (Apache-2.0, not bundled)
+./scripts/generate_protos.sh       # Python stubs into generated/
 
-floodgate --config config.yaml
-floodgate --config config.yaml -v  # very verbose DEBUG logging
+PYTHONPATH=.:generated floodgate --config config.yaml
+PYTHONPATH=.:generated floodgate --config config.yaml -v   # very verbose DEBUG logging
 ```
+
+The generated stubs are not part of the installed package, so `PYTHONPATH` must point at the repository root and `generated/`; without it floodgate exits with `ModuleNotFoundError: No module named 'generated'`.
 
 ## Configuration
 
@@ -154,10 +154,10 @@ See [config.yaml](config.yaml) for a fully annotated example.
 | `drop_enabled` | `false` | Master switch for the drop filter (deny entirely). |
 | `drop_channels` | `"zerohop_channels"` | Channels on which the drop filter runs. List of channels, the literal string `"zerohop_channels"` to inherit, or `null` for all channels. |
 | `drop_portnums` | `[]` | Meshtastic portnums (proto enum names like `RANGE_TEST_APP`) to drop. |
-| `topic_filter` | `msh/#` | MQTT topic pattern to apply. |
+| `topic_filter` | `msh/#` | MQTT topic filter floodgate asks EMQX to call it for. |
 | `grpc_port` | `9000` | gRPC listen port. |
 | `grpc_max_workers` | `16` | Size of the gRPC server thread pool. Match or exceed the broker's ExHook `pool_size` — see [Sizing the thread pool](#sizing-the-thread-pool). |
-| `health_port` | `8080` | HTTP health check port. `GET /health` returns `{"status":"ok","stats":{...}}`. |
+| `health_port` | `8080` | HTTP health check port. `GET /health` returns `{"status":"ok","stats":{...}}`. The image's Docker `HEALTHCHECK` probes 8080, so change both together. |
 | `stats_interval_s` | `60` | Stats log interval in seconds. |
 | `stats_log` | `true` | Log periodic stats summaries. Set `false` to disable. |
 | `log_level` | `INFO` | `INFO` shows per-message outcomes. `DEBUG` adds verbose internals. |
@@ -165,7 +165,7 @@ See [config.yaml](config.yaml) for a fully annotated example.
 
 > **Migrating from a pre-rename config?** The keys `channel_policy`, `channel_blacklist`, and `channel_whitelist` were removed. floodgate now refuses to start if they appear in `config.yaml` and prints the new equivalents. Update your config and restart.
 >
-> **Unknown keys are rejected too** (since 0.5.0). A misspelled key such as `zerohop_channel:` used to merge in silently and leave the default in effect; floodgate now refuses to start and lists the keys it does recognise.
+> **Unknown keys are rejected too** (since 0.5.0). A misspelled key such as `zerohop_channel:` used to merge in silently and leave the default in effect; floodgate now refuses to start and lists the keys it does recognize.
 
 **Every value is validated at startup** (since 0.6.0), and all problems are reported together:
 
@@ -177,9 +177,9 @@ See [config.yaml](config.yaml) for a fully annotated example.
 
 A configuration error exits with status 2 and a single `Configuration error:` line, no traceback.
 
-### Zerohop
+### Zero-hop
 
-The default zerohop list contains the eight standard Meshtastic public channel presets:
+The default `zerohop_channels` list contains the eight standard Meshtastic public channel presets:
 ```yaml
 zerohop_enabled: true
 zerohop_channels:
@@ -197,19 +197,19 @@ To zero-hop every channel a gateway forwards (maximum enforcement), pass them al
 
 ### Drop
 
-The drop filter denies a publish entirely — EMQX does not deliver it to subscribers, so it doesn't appear in MQTT consumers, dashboards, or chat logs. Drop runs *before* zerohop; a dropped packet never reaches the zerohop check.
+The drop filter denies a publish entirely — EMQX does not deliver it to subscribers, so it doesn't appear in MQTT consumers, dashboards, or chat logs. Drop runs *before* zero-hop; a dropped packet never reaches the zero-hop check.
 
-The motivating use case is portnum traffic that floods the standard public channels and isn't useful in MQTT downstream — for example, `RANGE_TEST_APP`:
+The motivating use case is portnum traffic that floods the standard public channels and isn't useful in MQTT downstream — for example, `RANGE_TEST_APP`. Firmware 2.8 compiles the range test module out of every build ([meshtastic/firmware#11150](https://github.com/meshtastic/firmware/pull/11150); the source file remains, the global `MESHTASTIC_EXCLUDE_RANGETEST=1` excludes it), so these come only from older nodes; firmware itself suppresses range-test uplink only when a gateway points at the default public broker, so on a private broker floodgate is the filter.
 ```yaml
 drop_enabled: true
-drop_channels: "zerohop_channels"   # same scope as zerohop
+drop_channels: "zerohop_channels"   # same scope as zero-hop
 drop_portnums:
   - "RANGE_TEST_APP"
 ```
 
 `drop_channels` accepts:
 
-- the literal string `"zerohop_channels"` to reuse the same list as `zerohop_channels` (default — keeps drop scope aligned with zerohop scope without duplication),
+- the literal string `"zerohop_channels"` to reuse the same list as `zerohop_channels` (default — keeps drop scope aligned with zero-hop scope without duplication),
 - an explicit list of channel names, e.g. `["LongFast", "MediumFast"]`,
 - `null` (or an empty list) to apply on all channels.
 
@@ -219,13 +219,15 @@ drop_portnums:
 
 > **Publisher behavior.** When floodgate denies a publish, EMQX still sends a normal PUBACK to the publisher — there's no protocol-level signal back to the gateway that its message was filtered. This is a property of the EMQX ExHook deny mechanism, not floodgate. Operators monitoring publisher-side success counters won't see drops; the floodgate `dropped` counter and per-message log lines are the source of truth.
 
+## Operations
+
 ### ExHook failure policy
 
 EMQX's `failed_action` is documented as controlling what happens to MQTT messages when floodgate
 is unreachable (crash, restart, upgrade). **For `message.publish` it does not do what its name
 suggests — floodgate fails _open_ either way.**
 
-| `failed_action` | Floodgate down | Observed |
+| `failed_action` | floodgate down | Observed |
 |-----------------|----------------|----------|
 | `deny` | Messages **delivered at full `hop_limit`** | Mesh floods |
 | `ignore` | Messages delivered at full `hop_limit` | Mesh floods |
@@ -248,21 +250,24 @@ not drop packets. It silently switches the anti-flood protection off: traffic ke
 full `hop_limit` and the mesh reverts to exactly the flooding floodgate exists to prevent.
 Nothing in floodgate's logs will say so, because floodgate isn't running.
 
-**Monitor `metrics.failed`**, which is the only place the outage is visible:
+**Monitor `metrics.failed`**, which is the only place the outage is visible (`$EMQX` and `$TOKEN` as in [Registering the ExHook](#registering-the-exhook)):
 
 ```bash
 curl -s "$EMQX/api/v5/exhooks/floodgate" -H "Authorization: Bearer $TOKEN" \
-  | jq '{failed: .metrics.failed, status: [.node_status[].status]}'
+  | jq '{failed: .metrics.failed, nodes: [.node_status[].status]}'
 ```
 
 Alert on it increasing, or on EMQX's `exhook_call_exception` error log. Publisher-side counters
 and subscriber-side delivery both look completely normal during an outage.
 
-**A config error is an outage too.** floodgate refuses to start on a removed or unknown config key,
-and a floodgate that won't start is exactly the fail-open case above — protection off, broker
-healthy. The Helm chart contains this: the config checksum rolls a new pod, `maxUnavailable: 0`
+**A config error is an outage too.** floodgate refuses to start on an invalid config, and a
+floodgate that won't start is exactly the fail-open case above — protection off, broker healthy.
+The Helm chart contains this only partly: the config checksum rolls a new pod, `maxUnavailable: 0`
 keeps the old one serving until the new one is Ready, and a crash-looping replacement never
-becomes Ready. **Docker Compose has no such guard**, and the static `k8s/` manifests are worse:
+becomes Ready. But the ConfigMap is updated in place, so the old pod is now holding the bad file
+too and fails the next time it restarts for any reason. Use `helm upgrade --wait` (plain
+`helm upgrade` reports success while the new pod crash-loops) and fix forward promptly.
+**Docker Compose has no such guard**, and the static `k8s/` manifests are worse:
 nothing rolls the pod on a ConfigMap edit, so a bad config sits unnoticed until the next unrelated
 restart takes floodgate down. In Compose there is a second trap: if EMQX `depends_on` floodgate
 being healthy (as recommended under [Startup ordering](#startup-ordering-and-upgrades)) and EMQX is
@@ -270,8 +275,9 @@ created or recreated in the same `docker compose up`, EMQX never starts and the 
 down. Restart floodgate on its own first, and wait for `ExHook connected: EMQX ...` in its logs
 before walking away — that line means EMQX is calling floodgate, not just that the process started.
 
-Regression-tested by the `hook-down-fails-open` and `recovery-after-hook-down` integration cases,
-so if a future EMQX release starts failing closed, CI will say so.
+CI regression-tests the stopped-server path (`hook-down-fails-open`, `recovery-after-hook-down`),
+so if a future EMQX release starts failing closed there, CI will say so. The hung-server path was
+verified by hand on EMQX 6.2.0 and is not in CI.
 
 ### Sizing the thread pool
 
@@ -301,7 +307,7 @@ The configured value is logged at startup:
 
 ### Startup ordering and upgrades
 
-In Docker Compose, EMQX should `depends_on` floodgate (not the other way around). Floodgate is a gRPC server — it starts first, listens on port 9000, and waits. EMQX connects to it after boot. See [docker-compose.yaml](docker-compose.yaml) for the reference configuration, and the config-error trap above.
+In Docker Compose, EMQX should `depends_on` floodgate (not the other way around). floodgate is a gRPC server — it starts first, listens on port 9000, and waits. EMQX connects to it after boot. See [docker-compose.yaml](docker-compose.yaml) for the reference configuration, and the config-error trap above.
 
 In Kubernetes the chart's rolling update (`maxUnavailable: 0, maxSurge: 1`) starts the new pod and waits for it to be Ready before terminating the old one, and EMQX reconnects through the Service. Readiness means floodgate's HTTP server is up, not that EMQX has connected: `/health` reports `ok` either way. Whether calls in flight while EMQX moves its connections are delivered unmodified has not been measured, so keep `auto_reconnect` short and treat an upgrade as a possible brief protection gap.
 
@@ -311,8 +317,10 @@ In Kubernetes the chart's rolling update (`maxUnavailable: 0, maxSurge: 1`) star
 
 | Port | Purpose | Exposure |
 |------|---------|----------|
-| `9000` (gRPC) | EMQX ExHook connection | **Internal only.** Bind to your private/cluster network. Never expose publicly. |
+| `9000` (gRPC) | EMQX ExHook connection | **Internal only.** Never expose publicly. |
 | `8080` (HTTP) | Health check `/health` | **Internal only.** Operational stats — restrict to your monitoring network. |
+
+floodgate listens on all interfaces and has no bind-address option, so restrict exposure outside the process: publish ports on loopback or a private address in Docker, rely on a ClusterIP Service (plus a NetworkPolicy if you want one) in Kubernetes, or use a host firewall — remembering that Docker-published ports bypass ufw.
 
 The gRPC connection between EMQX and floodgate is **unencrypted** (no TLS). This is acceptable when both services run in the same Kubernetes namespace or Docker network on a trusted private network. Do not route this port through a public-facing load balancer or ingress.
 
@@ -353,16 +361,19 @@ Per-message outcomes are logged at **INFO** — no special flags required. Field
 
 **Text mode** (default):
 ```
-2026-04-01 12:00:01 INFO     [floodgate.zerohop] [ZEROHOP] topic=msh/US/2/e/LongFast/!a2e1a8c4 channel=LongFast encoding=e id=3827461829 from=!a2e1a8c4 to=!ffffffff hop_limit=3 hop_start=3
-2026-04-01 12:00:02 INFO     [floodgate.zerohop] [NOOP] topic=msh/US/2/e/LongFast/!b3c4d5e6 channel=LongFast encoding=e id=2019283746 from=!b3c4d5e6 to=!ffffffff hop_limit=0 hop_start=3
-2026-04-01 12:00:08 INFO     [floodgate.zerohop] [DROPPED] topic=msh/US/2/e/LongFast/!c1c2c3c4 channel=LongFast encoding=e portnum=RANGE_TEST_APP id=694258842 from=!c1c2c3c4 to=!ffffffff
-2026-04-01 12:00:15 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4 channel=MyPrivate encoding=e id=1234567890 from=!a2e1a8c4 to=!ffffffff
-2026-04-01 12:01:01 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=1 noop=0 dropped=4 skipped=1050 errors=0 total=1197
+2026-10-11 01:52:16 INFO     [floodgate.zerohop] [ZEROHOP] topic=msh/US/2/e/LongFast/!a2e1a8c4 channel=LongFast encoding=e id=3827461829 from=!a2e1a8c4 to=!ffffffff hop_limit=3 hop_start=3 relay=c4 via_mqtt=False
+2026-10-11 01:52:16 INFO     [floodgate.zerohop] [NOOP] topic=msh/US/2/e/LongFast/!b3c4d5e6 channel=LongFast encoding=e id=2019283746 from=!b3c4d5e6 to=!ffffffff hop_limit=0 hop_start=3 relay=c4 via_mqtt=False
+2026-10-11 01:52:16 INFO     [floodgate.zerohop] [DROPPED] topic=msh/US/2/e/LongFast/!c1c2c3c4 channel=LongFast encoding=e portnum=RANGE_TEST_APP id=694258842 from=!c1c2c3c4 to=!ffffffff
+2026-10-11 01:52:16 INFO     [floodgate.zerohop] [PASSTHRU] topic=msh/US/2/e/MyPrivate/!a2e1a8c4 channel=MyPrivate encoding=e id=1234567890 from=!a2e1a8c4 to=!ffffffff hop_start=3 relay=c4 via_mqtt=False
+2026-10-11 01:52:16 WARNING  [floodgate.zerohop] [WARN] topic=msh/US/2/json/LongFast/!a2e1a8c4 channel=LongFast encoding=json bytes=3
+2026-10-11 01:53:16 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=1 noop=0 dropped=4 skipped=1050 errors=0 total=1197
 ```
 
-**JSON mode** (`log_format: json` or `FLOODGATE_LOG_FORMAT=json`):
+`hop_limit` and `hop_start` on `[ZEROHOP]` lines are the sender's original values; the delivered packet has both at 0. A value containing a space, `=`, quote, backslash or control character is double-quoted with those characters escaped, so a crafted topic cannot forge a log line or a `key=value` field.
+
+**JSON mode** (`log_format: json` or `FLOODGATE_LOG_FORMAT=json`); timestamps are UTC:
 ```json
-{"timestamp":"2026-04-01T12:00:01Z","level":"INFO","name":"floodgate.zerohop","message":"zerohop","event":"message","outcome":"zerohop","topic":"msh/US/2/e/LongFast/!a2e1a8c4","channel":"LongFast","encoding":"e","id":3827461829,"from":"!a2e1a8c4","to":"!ffffffff","hop_limit":3,"hop_start":3,"relay":null,"via_mqtt":null}
+{"timestamp": "2026-10-11T01:52:16Z", "level": "INFO", "name": "floodgate.zerohop", "message": "zerohop", "event": "message", "outcome": "zerohop", "topic": "msh/US/2/e/LongFast/!a2e1a8c4", "channel": "LongFast", "encoding": "e", "id": 3827461829, "from": "!a2e1a8c4", "to": "!ffffffff", "hop_limit": 3, "hop_start": 3, "relay": "c4", "via_mqtt": false}
 ```
 
 JSON output is optimized for Loki/Grafana: the `message` field is just the outcome tag, all data is in structured top-level fields. Example LogQL queries:
@@ -404,27 +415,27 @@ MeshPacket {
   from:       0xa2e1a8c4
   to:         0xffffffff
   id:         3827461829
-  hop_limit:  0            ← zeroed — gateway will not rebroadcast
+  hop_limit:  0            ← zeroed — a gateway shows it but does not retransmit it
   hop_start:  0            ← zeroed so receivers don't render ghost hops in traceroute
   channel:    8
   payload:    <encrypted Data protobuf>   (unchanged)
 }
 ```
 
-The JSON topic mirror (`/json/LongFast/!a2e1a8c4`) is zeroed the same way — `hop_limit`, `hop_start`, and `hops_away` are set to `0` in the JSON object when present.
+The JSON topic mirror (`/json/LongFast/!a2e1a8c4`) is zeroed the same way: `hop_limit` is set to `0` (added if absent, since firmware's JSON omits it), and `hop_start` and `hops_away` are zeroed when present.
 
 ## Development
 
 ```bash
-./scripts/download_protobufs.sh   # Meshtastic protobufs (not bundled)
-./scripts/generate_protos.sh      # Python stubs into generated/
 pip install -e ".[dev]"
+./scripts/download_protobufs.sh   # Meshtastic protobufs at the pinned commit (not bundled)
+./scripts/generate_protos.sh      # Python stubs into generated/
 pytest tests/ --ignore=tests/test_container_smoke.py -q   # no Docker required
 pytest tests/ -q                  # adds the container smoke test (requires Docker)
 ./scripts/run-integration.sh      # EMQX + floodgate + a real meshtasticd node (requires Docker)
 ```
 
-Without the generated stubs, the protobuf tests skip rather than fail, so a low pass count usually means `generated/` is missing. Contributor workflow, test tiers and the release process are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Without the generated stubs, the protobuf tests skip rather than fail, so a low pass count usually means `generated/` is missing (CI sets `FLOODGATE_NO_SKIPS=1` to make any skip fatal). Contributor workflow, test tiers and the release process are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Legal
 
@@ -434,5 +445,4 @@ floodgate is independent software that interoperates with Meshtastic's MQTT pack
 
 ## License
 
-GPL v3.0 — see [LICENSE](LICENSE).
-EMQX ExHook proto and Meshtastic protobufs are Apache 2.0 (not bundled).
+GPL v3.0 or later — see [LICENSE](LICENSE). The Meshtastic protobufs and the EMQX ExHook proto are Apache-2.0; the container image includes code generated from them — see [NOTICE](NOTICE).

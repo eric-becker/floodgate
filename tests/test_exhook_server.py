@@ -112,6 +112,12 @@ class TestOnMessagePublish:
             resp = servicer.OnMessagePublish(_publish_request(b"{}"), None)
         assert resp.type == exhook_pb2.ValuedResponse.IGNORE
 
+    def test_debug_line_escapes_the_topic(self, caplog):
+        servicer = HookProviderServicer(_config())
+        with caplog.at_level("DEBUG", logger="floodgate.exhook_server"):
+            servicer.OnMessagePublish(_publish_request(b"{}", "msh/US/2/e/X/!a\nFORGED"), None)
+        assert not [r for r in caplog.records if "\n" in r.getMessage()]
+
     def test_dispatches_on_process_result(self):
         servicer = HookProviderServicer(_config())
         with patch(
