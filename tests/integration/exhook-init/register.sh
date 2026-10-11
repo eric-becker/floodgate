@@ -59,15 +59,20 @@ else
 fi
 
 echo "exhook-init: verifying registration"
-STATUS=$(curl -sf --connect-timeout 2 --max-time 5 "${EMQX_URL}/api/v5/exhooks/${HOOK_NAME}" \
-    -H "Authorization: Bearer ${TOKEN}" | jq -r '.status // "unknown"')
-echo "exhook-init: hook '${HOOK_NAME}' status=${STATUS}"
+# EMQX 6 reports connection status per node under node_status[]; there is no
+# top-level `status`. Require every node to be connected before the test
+# driver starts, so a hook that never connects fails here, not as a confusing
+# assertion later.
+for attempt in $(seq 1 15); do
+    NODES=$(curl -sf --connect-timeout 2 --max-time 5 "${EMQX_URL}/api/v5/exhooks/${HOOK_NAME}" \
+        -H "Authorization: Bearer ${TOKEN}" | jq -r '[.node_status[].status] | join(",")' || true)
+    echo "exhook-init: attempt ${attempt}: node_status=${NODES:-unreadable}"
+    if [ -n "${NODES}" ] && [ -z "$(echo "${NODES}" | tr ',' '\n' | grep -v '^connected$')" ]; then
+        echo "exhook-init: success"
+        exit 0
+    fi
+    sleep 2
+done
 
-if [ "${STATUS}" = "connected" ] || [ "${STATUS}" = "running" ]; then
-    echo "exhook-init: success"
-    exit 0
-fi
-
-echo "exhook-init: hook registered but status=${STATUS}; floodgate may still be starting."
-echo "exhook-init: init container exits 0; floodgate->EMQX gRPC will recover on its own."
-exit 0
+echo "exhook-init: hook '${HOOK_NAME}' never reported connected on every node" >&2
+exit 1
