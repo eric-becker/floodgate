@@ -17,8 +17,8 @@ from floodgate.config import (
 # should_zerohop
 # ---------------------------------------------------------------------------
 
-class TestShouldZerohop:
 
+class TestShouldZerohop:
     def test_enabled_and_channel_in_set_zerohops(self):
         config = {
             "zerohop_enabled": True,
@@ -56,8 +56,8 @@ class TestShouldZerohop:
 # should_drop
 # ---------------------------------------------------------------------------
 
-class TestShouldDrop:
 
+class TestShouldDrop:
     def _config(self, *, enabled=True, drop_channels=None, drop_portnums=("RANGE_TEST_APP",)):
         return {
             "drop_enabled": enabled,
@@ -89,7 +89,7 @@ class TestShouldDrop:
 
     def test_drop_channels_none_means_all_channels(self):
         config = self._config(drop_channels=None)
-        assert should_drop(config, "LongFast",  "RANGE_TEST_APP") is True
+        assert should_drop(config, "LongFast", "RANGE_TEST_APP") is True
         assert should_drop(config, "AnyChannel", "RANGE_TEST_APP") is True
 
 
@@ -97,18 +97,21 @@ class TestShouldDrop:
 # load_config — defaults and basic merge
 # ---------------------------------------------------------------------------
 
-class TestLoadConfigDefaults:
 
-    @pytest.mark.parametrize("key,expected", [
-        ("zerohop_enabled",     True),
-        ("drop_enabled",        False),
-        ("drop_channels",       INHERIT_ZEROHOP_CHANNELS),
-        ("drop_portnums",       []),
-        ("grpc_port",           9000),
-        ("health_port",         8080),
-        ("log_format",          "text"),
-        ("_drop_portnums_set",  set()),
-    ])
+class TestLoadConfigDefaults:
+    @pytest.mark.parametrize(
+        "key,expected",
+        [
+            ("zerohop_enabled", True),
+            ("drop_enabled", False),
+            ("drop_channels", INHERIT_ZEROHOP_CHANNELS),
+            ("drop_portnums", []),
+            ("grpc_port", 9000),
+            ("health_port", 8080),
+            ("log_format", "text"),
+            ("_drop_portnums_set", set()),
+        ],
+    )
     def test_default_value(self, key, expected):
         assert load_config(None)[key] == expected
 
@@ -127,7 +130,6 @@ class TestLoadConfigDefaults:
 
 
 class TestLoadConfigFromFile:
-
     def test_load_from_file(self, tmp_path):
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(yaml.dump({"zerohop_enabled": False, "grpc_port": 8080}))
@@ -184,13 +186,16 @@ class TestLoadConfigFromFile:
 # Removed-key rejection
 # ---------------------------------------------------------------------------
 
-class TestRemovedKeysRejected:
 
-    @pytest.mark.parametrize("key,value", [
-        ("channel_policy",    "blacklist"),
-        ("channel_blacklist", ["LongFast"]),
-        ("channel_whitelist", []),
-    ])
+class TestRemovedKeysRejected:
+    @pytest.mark.parametrize(
+        "key,value",
+        [
+            ("channel_policy", "blacklist"),
+            ("channel_blacklist", ["LongFast"]),
+            ("channel_whitelist", []),
+        ],
+    )
     def test_each_removed_key_raises(self, tmp_path, key, value):
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(yaml.dump({key: value}))
@@ -200,14 +205,18 @@ class TestRemovedKeysRejected:
 
     def test_error_message_lists_all_removed_keys_present(self, tmp_path):
         cfg_file = tmp_path / "config.yaml"
-        cfg_file.write_text(yaml.dump({
-            "channel_policy":    "blacklist",
-            "channel_whitelist": [],
-        }))
+        cfg_file.write_text(
+            yaml.dump(
+                {
+                    "channel_policy": "blacklist",
+                    "channel_whitelist": [],
+                }
+            )
+        )
         with pytest.raises(ConfigError) as exc:
             load_config(str(cfg_file))
         msg = str(exc.value)
-        assert "channel_policy"    in msg
+        assert "channel_policy" in msg
         assert "channel_whitelist" in msg
 
 
@@ -215,23 +224,31 @@ class TestRemovedKeysRejected:
 # drop_channels resolution
 # ---------------------------------------------------------------------------
 
-class TestDropChannelsResolution:
 
+class TestDropChannelsResolution:
     def test_inherits_zerohop_channels_via_sentinel_string(self, tmp_path):
         cfg_file = tmp_path / "config.yaml"
-        cfg_file.write_text(yaml.dump({
-            "zerohop_channels": ["LongFast", "MediumFast"],
-            "drop_channels":    INHERIT_ZEROHOP_CHANNELS,
-        }))
+        cfg_file.write_text(
+            yaml.dump(
+                {
+                    "zerohop_channels": ["LongFast", "MediumFast"],
+                    "drop_channels": INHERIT_ZEROHOP_CHANNELS,
+                }
+            )
+        )
         cfg = load_config(str(cfg_file))
         assert cfg["_drop_channels_set"] == {"LongFast", "MediumFast"}
 
     def test_explicit_list(self, tmp_path):
         cfg_file = tmp_path / "config.yaml"
-        cfg_file.write_text(yaml.dump({
-            "zerohop_channels": ["LongFast"],
-            "drop_channels":    ["MediumFast", "ShortFast"],
-        }))
+        cfg_file.write_text(
+            yaml.dump(
+                {
+                    "zerohop_channels": ["LongFast"],
+                    "drop_channels": ["MediumFast", "ShortFast"],
+                }
+            )
+        )
         cfg = load_config(str(cfg_file))
         assert cfg["_drop_channels_set"] == {"MediumFast", "ShortFast"}
 
@@ -264,13 +281,17 @@ class TestDropChannelsResolution:
 # drop_portnums set
 # ---------------------------------------------------------------------------
 
-class TestDropPortnums:
 
+class TestDropPortnums:
     def test_user_list_becomes_set(self, tmp_path):
         cfg_file = tmp_path / "config.yaml"
-        cfg_file.write_text(yaml.dump({
-            "drop_portnums": ["RANGE_TEST_APP", "TELEMETRY_APP"],
-        }))
+        cfg_file.write_text(
+            yaml.dump(
+                {
+                    "drop_portnums": ["RANGE_TEST_APP", "TELEMETRY_APP"],
+                }
+            )
+        )
         cfg = load_config(str(cfg_file))
         assert cfg["_drop_portnums_set"] == {"RANGE_TEST_APP", "TELEMETRY_APP"}
 
@@ -285,6 +306,7 @@ class TestDropPortnums:
 # String-list validation (catches numeric portnum IDs, etc.)
 # ---------------------------------------------------------------------------
 
+
 class TestStringListValidation:
     """A user typing `drop_portnums: [66]` (the numeric portnum) instead of
     `["RANGE_TEST_APP"]` would silently never match without this check."""
@@ -295,7 +317,7 @@ class TestStringListValidation:
         with pytest.raises(ConfigError) as exc:
             load_config(str(cfg_file))
         assert "drop_portnums" in str(exc.value)
-        assert "66"            in str(exc.value)
+        assert "66" in str(exc.value)
 
     def test_drop_channels_with_int_entry_raises(self, tmp_path):
         cfg_file = tmp_path / "config.yaml"
@@ -321,6 +343,7 @@ class TestStringListValidation:
 # ---------------------------------------------------------------------------
 # grpc_max_workers
 # ---------------------------------------------------------------------------
+
 
 class TestGrpcMaxWorkers:
     """The gRPC thread pool must be sized against the broker's exhook pool_size.
@@ -372,6 +395,7 @@ class TestGrpcMaxWorkers:
 # Unknown-key rejection
 # ---------------------------------------------------------------------------
 
+
 class TestUnknownKeysRejected:
     """A misspelled key would otherwise merge in silently and leave the
     default in effect -- e.g. `zerohop_channel:` keeps the 8 presets."""
@@ -390,10 +414,11 @@ class TestUnknownKeysRejected:
             load_config(str(cfg_file))
         msg = str(exc.value)
         assert "drop_portnum" in msg
-        assert "telemetry"    in msg
+        assert "telemetry" in msg
 
     def test_every_default_key_is_accepted(self, tmp_path):
         from floodgate.config import DEFAULT_CONFIG
+
         cfg_file = tmp_path / "config.yaml"
         cfg_file.write_text(yaml.dump(DEFAULT_CONFIG))
         load_config(str(cfg_file))
@@ -418,7 +443,6 @@ class TestUnknownKeysRejected:
         cfg_file.write_text(yaml.dump(values["config"]))
         load_config(str(cfg_file))
 
-
     def test_removed_and_unknown_keys_reported_together(self, tmp_path):
         """One error covers both, so fixing a config doesn't take two restarts."""
         cfg_file = tmp_path / "config.yaml"
@@ -427,12 +451,13 @@ class TestUnknownKeysRejected:
             load_config(str(cfg_file))
         msg = str(exc.value)
         assert "channel_policy" in msg
-        assert "drop_portnum"   in msg
+        assert "drop_portnum" in msg
 
 
 # ---------------------------------------------------------------------------
 # Value validation
 # ---------------------------------------------------------------------------
+
 
 def _load(tmp_path, data):
     cfg_file = tmp_path / "config.yaml"
@@ -524,7 +549,7 @@ class TestDropPortnumNames:
             _load(tmp_path, {"drop_portnums": ["RANGETEST_APP"]})
         msg = str(exc.value)
         assert "RANGETEST_APP" in msg
-        assert "RANGE_TEST_APP" in msg   # did-you-mean
+        assert "RANGE_TEST_APP" in msg  # did-you-mean
 
     def test_wrong_case_portnum_rejected(self, tmp_path):
         pytest.importorskip("meshtastic")
@@ -535,4 +560,3 @@ class TestDropPortnumNames:
         pytest.importorskip("meshtastic")
         cfg = _load(tmp_path, {"drop_portnums": ["RANGE_TEST_APP", "DETECTION_SENSOR_APP"]})
         assert cfg["_drop_portnums_set"] == {"RANGE_TEST_APP", "DETECTION_SENSOR_APP"}
-

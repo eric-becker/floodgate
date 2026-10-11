@@ -9,7 +9,10 @@ import yaml
 def _run(*args, env=None):
     return subprocess.run(
         [sys.executable, "-m", "floodgate", *args],
-        capture_output=True, text=True, timeout=30, env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
     )
 
 
@@ -31,6 +34,7 @@ def test_missing_config_file_exits_2(tmp_path):
 
 def test_version_flag():
     from floodgate import __version__
+
     result = _run("--version")
     assert result.returncode == 0
     assert result.stdout.strip() == f"floodgate {__version__}"

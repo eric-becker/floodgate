@@ -8,7 +8,6 @@ from floodgate.log_setup import StructuredTextFormatter, build_formatter
 
 
 class TestBuildFormatter:
-
     def test_text_formatter_is_structured(self):
         fmt = build_formatter("text")
         assert isinstance(fmt, StructuredTextFormatter)
@@ -62,7 +61,6 @@ class TestBuildFormatter:
 
 
 class TestStructuredTextFormatter:
-
     def _format(self, msg, **extras):
         fmt = StructuredTextFormatter()
         record = logging.LogRecord("test", logging.INFO, "", 0, msg, (), None)
@@ -72,9 +70,14 @@ class TestStructuredTextFormatter:
 
     def test_message_event_renders_outcome_tag(self):
         output = self._format(
-            "zerohop", event="message", outcome="zerohop",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", hop_limit=3, hop_start=3,
+            "zerohop",
+            event="message",
+            outcome="zerohop",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            hop_limit=3,
+            hop_start=3,
         )
         assert "[ZEROHOP]" in output
         assert "topic=msh/US/2/e/LongFast/!1234" in output
@@ -84,9 +87,16 @@ class TestStructuredTextFormatter:
 
     def test_stats_event_renders_stats_tag(self):
         output = self._format(
-            "stats", event="stats", interval_s=60,
-            zerohop=5, passthru=1, noop=0, dropped=2, skipped=10,
-            errors=0, total=18,
+            "stats",
+            event="stats",
+            interval_s=60,
+            zerohop=5,
+            passthru=1,
+            noop=0,
+            dropped=2,
+            skipped=10,
+            errors=0,
+            total=18,
         )
         assert "[STATS]" in output
         assert "zerohop=5" in output
@@ -101,9 +111,14 @@ class TestStructuredTextFormatter:
 
     def test_none_fields_omitted(self):
         output = self._format(
-            "passthru", event="message", outcome="passthru",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", relay=None, via_mqtt=None,
+            "passthru",
+            event="message",
+            outcome="passthru",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            relay=None,
+            via_mqtt=None,
         )
         assert "relay=" not in output
         assert "via_mqtt=" not in output
@@ -115,7 +130,13 @@ class TestJsonFormatterSnapshots:
     def _format_json(self, msg, level=logging.INFO, **extras):
         fmt = build_formatter("json")
         record = logging.LogRecord(
-            "floodgate.zerohop", level, "", 0, msg, (), None,
+            "floodgate.zerohop",
+            level,
+            "",
+            0,
+            msg,
+            (),
+            None,
         )
         record.created = 1743508801.0
         for k, v in extras.items():
@@ -124,9 +145,15 @@ class TestJsonFormatterSnapshots:
 
     def test_zerohop_message_fields(self):
         data = self._format_json(
-            "zerohop", event="message", outcome="zerohop",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", id="0x12345678", hop_limit=0, hop_start=3,
+            "zerohop",
+            event="message",
+            outcome="zerohop",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            id="0x12345678",
+            hop_limit=0,
+            hop_start=3,
             **{"from": "!abcd1234", "to": "!ffffffff"},
         )
         assert data["message"] == "zerohop"
@@ -148,9 +175,15 @@ class TestJsonFormatterSnapshots:
 
     def test_noop_message_fields(self):
         data = self._format_json(
-            "noop", event="message", outcome="noop",
-            topic="msh/US/2/e/LongFast/!5678", channel="LongFast",
-            encoding="e", id="0xdeadbeef", hop_limit=0, hop_start=3,
+            "noop",
+            event="message",
+            outcome="noop",
+            topic="msh/US/2/e/LongFast/!5678",
+            channel="LongFast",
+            encoding="e",
+            id="0xdeadbeef",
+            hop_limit=0,
+            hop_start=3,
             **{"from": "!abcd1234", "to": "!ffffffff"},
         )
         assert data["outcome"] == "noop"
@@ -159,8 +192,11 @@ class TestJsonFormatterSnapshots:
 
     def test_passthru_message_fields(self):
         data = self._format_json(
-            "passthru", event="message", outcome="passthru",
-            topic="msh/US/2/e/MyChannel/!9999", channel="MyChannel",
+            "passthru",
+            event="message",
+            outcome="passthru",
+            topic="msh/US/2/e/MyChannel/!9999",
+            channel="MyChannel",
             encoding="e",
         )
         assert data["outcome"] == "passthru"
@@ -169,9 +205,14 @@ class TestJsonFormatterSnapshots:
 
     def test_warn_message_fields(self):
         data = self._format_json(
-            "warn", level=logging.WARNING, event="message", outcome="warn",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", bytes=42,
+            "warn",
+            level=logging.WARNING,
+            event="message",
+            outcome="warn",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            bytes=42,
         )
         assert data["level"] == "WARNING"
         assert data["bytes"] == 42
@@ -179,25 +220,37 @@ class TestJsonFormatterSnapshots:
 
     def test_stats_event_fields(self):
         data = self._format_json(
-            "stats", event="stats",
-            interval_s=60, zerohop=142, passthru=1, noop=0, dropped=4,
-            skipped=1050, errors=0, total=1197,
+            "stats",
+            event="stats",
+            interval_s=60,
+            zerohop=142,
+            passthru=1,
+            noop=0,
+            dropped=4,
+            skipped=1050,
+            errors=0,
+            total=1197,
         )
-        assert data["event"]      == "stats"
+        assert data["event"] == "stats"
         assert data["interval_s"] == 60
-        assert data["zerohop"]    == 142
-        assert data["passthru"]   == 1
-        assert data["noop"]       == 0
-        assert data["dropped"]    == 4
-        assert data["skipped"]    == 1050
-        assert data["errors"]     == 0
-        assert data["total"]      == 1197
+        assert data["zerohop"] == 142
+        assert data["passthru"] == 1
+        assert data["noop"] == 0
+        assert data["dropped"] == 4
+        assert data["skipped"] == 1050
+        assert data["errors"] == 0
+        assert data["total"] == 1197
 
     def test_dropped_message_fields(self):
         data = self._format_json(
-            "dropped", event="message", outcome="dropped",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", portnum="RANGE_TEST_APP", id="0x12345678",
+            "dropped",
+            event="message",
+            outcome="dropped",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            portnum="RANGE_TEST_APP",
+            id="0x12345678",
             **{"from": "!abcd1234", "to": "!ffffffff"},
         )
         assert data["outcome"] == "dropped"
@@ -213,9 +266,13 @@ class TestJsonFormatterSnapshots:
 
     def test_none_fields_present_as_null_in_json(self):
         data = self._format_json(
-            "passthru", event="message", outcome="passthru",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            relay=None, via_mqtt=None,
+            "passthru",
+            event="message",
+            outcome="passthru",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            relay=None,
+            via_mqtt=None,
         )
         # python-json-logger includes None values as JSON null
         assert data["relay"] is None
@@ -223,9 +280,13 @@ class TestJsonFormatterSnapshots:
 
     def test_relay_field_when_present(self):
         data = self._format_json(
-            "zerohop", event="message", outcome="zerohop",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            relay="ab", via_mqtt=True,
+            "zerohop",
+            event="message",
+            outcome="zerohop",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            relay="ab",
+            via_mqtt=True,
         )
         assert data["relay"] == "ab"
         assert data["via_mqtt"] is True
@@ -237,7 +298,13 @@ class TestTextFormatterSnapshots:
     def _format_text(self, msg, level=logging.INFO, **extras):
         fmt = StructuredTextFormatter()
         record = logging.LogRecord(
-            "floodgate.zerohop", level, "", 0, msg, (), None,
+            "floodgate.zerohop",
+            level,
+            "",
+            0,
+            msg,
+            (),
+            None,
         )
         for k, v in extras.items():
             setattr(record, k, v)
@@ -245,9 +312,15 @@ class TestTextFormatterSnapshots:
 
     def test_zerohop_exact_field_order(self):
         output = self._format_text(
-            "zerohop", event="message", outcome="zerohop",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", id="0x12345678", hop_limit=0, hop_start=3,
+            "zerohop",
+            event="message",
+            outcome="zerohop",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            id="0x12345678",
+            hop_limit=0,
+            hop_start=3,
             **{"from": "!abcd1234", "to": "!ffffffff"},
         )
         expected_tail = (
@@ -261,9 +334,14 @@ class TestTextFormatterSnapshots:
 
     def test_dropped_exact_output_includes_portnum(self):
         output = self._format_text(
-            "dropped", event="message", outcome="dropped",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", portnum="RANGE_TEST_APP", id="0x12345678",
+            "dropped",
+            event="message",
+            outcome="dropped",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            portnum="RANGE_TEST_APP",
+            id="0x12345678",
             **{"from": "!abcd1234", "to": "!ffffffff"},
         )
         expected_tail = (
@@ -275,9 +353,15 @@ class TestTextFormatterSnapshots:
 
     def test_noop_exact_output(self):
         output = self._format_text(
-            "noop", event="message", outcome="noop",
-            topic="msh/US/2/e/LongFast/!5678", channel="LongFast",
-            encoding="e", id="0xdeadbeef", hop_limit=0, hop_start=3,
+            "noop",
+            event="message",
+            outcome="noop",
+            topic="msh/US/2/e/LongFast/!5678",
+            channel="LongFast",
+            encoding="e",
+            id="0xdeadbeef",
+            hop_limit=0,
+            hop_start=3,
             **{"from": "!abcd1234", "to": "!ffffffff"},
         )
         expected_tail = (
@@ -289,8 +373,11 @@ class TestTextFormatterSnapshots:
 
     def test_passthru_no_hop_fields(self):
         output = self._format_text(
-            "passthru", event="message", outcome="passthru",
-            topic="msh/US/2/e/MyChannel/!9999", channel="MyChannel",
+            "passthru",
+            event="message",
+            outcome="passthru",
+            topic="msh/US/2/e/MyChannel/!9999",
+            channel="MyChannel",
             encoding="e",
         )
         assert "[PASSTHRU]" in output
@@ -299,9 +386,14 @@ class TestTextFormatterSnapshots:
 
     def test_warn_exact_output(self):
         output = self._format_text(
-            "warn", level=logging.WARNING, event="message", outcome="warn",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", bytes=42,
+            "warn",
+            level=logging.WARNING,
+            event="message",
+            outcome="warn",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            bytes=42,
         )
         assert "[WARN]" in output
         assert "WARNING" in output
@@ -310,9 +402,16 @@ class TestTextFormatterSnapshots:
 
     def test_stats_exact_field_order(self):
         output = self._format_text(
-            "stats", event="stats",
-            interval_s=60, zerohop=142, passthru=1, noop=0, dropped=4,
-            skipped=1050, errors=0, total=1197,
+            "stats",
+            event="stats",
+            interval_s=60,
+            zerohop=142,
+            passthru=1,
+            noop=0,
+            dropped=4,
+            skipped=1050,
+            errors=0,
+            total=1197,
         )
         expected_tail = (
             "[STATS] interval_s=60 zerohop=142 passthru=1"
@@ -322,18 +421,28 @@ class TestTextFormatterSnapshots:
 
     def test_relay_and_via_mqtt_included(self):
         output = self._format_text(
-            "zerohop", event="message", outcome="zerohop",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", relay="ab", via_mqtt=True,
+            "zerohop",
+            event="message",
+            outcome="zerohop",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            relay="ab",
+            via_mqtt=True,
         )
         assert "relay=ab" in output
         assert "via_mqtt=True" in output
 
     def test_none_fields_omitted_from_text(self):
         output = self._format_text(
-            "passthru", event="message", outcome="passthru",
-            topic="msh/US/2/e/LongFast/!1234", channel="LongFast",
-            encoding="e", relay=None, via_mqtt=None,
+            "passthru",
+            event="message",
+            outcome="passthru",
+            topic="msh/US/2/e/LongFast/!1234",
+            channel="LongFast",
+            encoding="e",
+            relay=None,
+            via_mqtt=None,
         )
         assert "relay=" not in output
         assert "via_mqtt=" not in output
@@ -346,7 +455,9 @@ class TestTextFormatterSnapshots:
         # Topics are publisher-controlled; a newline must not start a new
         # log line that looks like a floodgate outcome.
         output = self._format_text(
-            "passthru", event="message", outcome="passthru",
+            "passthru",
+            event="message",
+            outcome="passthru",
             topic="msh/US/2/e/X\n2026-01-01 00:00:00 INFO [DROPPED] forged/!1",
             channel="X\r\x1b[31mred",
         )
@@ -355,15 +466,16 @@ class TestTextFormatterSnapshots:
         assert "channel=X\\r\\x1b[31mred" in output
 
     def test_non_ascii_channel_names_are_kept(self):
-        output = self._format_text("passthru", event="message", outcome="passthru",
-                                   channel="Café📡")
+        output = self._format_text(
+            "passthru", event="message", outcome="passthru", channel="Café📡"
+        )
         assert "channel=Café📡" in output
 
 
 class TestJsonTimestampIsUtc:
-
     def test_timestamp_rendered_in_utc_regardless_of_local_zone(self, monkeypatch):
         import time
+
         monkeypatch.setenv("TZ", "America/New_York")
         time.tzset()
         try:
@@ -374,4 +486,3 @@ class TestJsonTimestampIsUtc:
         finally:
             monkeypatch.delenv("TZ")
             time.tzset()
-
