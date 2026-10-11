@@ -33,6 +33,10 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru �
 | `tests/test_roundtrip.py`        | Round-trip fidelity: ciphertext byte-identical, packet still decrypts, only `hop_limit`/`hop_start` change, unknown fields survive. Guards the silent-corruption class field assertions can't see. |
 | `charts/floodgate/`              | Helm chart (supported install path). Values mirror `config.yaml` 1:1; rendered chart is validated in CI. |
 | `k8s/`                           | Static `kubectl apply -f` manifests, deprecated in favour of the chart. |
+| `.github/workflows/ci.yml`       | The only workflow: version, lint, test, smoke, integration, manifests, then image push and GitHub release (push/tag only, after everything passes). |
+| `scripts/check_version.sh`       | Fails unless pyproject, `__version__`, chart `appVersion`, the `k8s/` image tag (and the tag, when given) agree. |
+| `scripts/check_chart.py`         | Loads a rendered chart's ConfigMap with `load_config` and checks the rollout settings that contain a bad config. |
+| `NOTICE`                         | Third-party attribution (Apache-2.0 Meshtastic protobufs and EMQX ExHook proto). |
 
 ## Dev Setup
 
@@ -73,11 +77,12 @@ After startup, register the ExHook in EMQX (see README Deployment section for th
 
 ## Branching & Release Strategy
 
-- `main` — stable, tagged releases only
+- `main` — always releasable; releases are tags on `main`
 - `feat/<name>`, `fix/<name>`, `docs/<name>`, `chore/<name>` — branch from main, PR back to main
 - Commits: conventional format — `feat:`, `fix:`, `docs:`, `test:`, `chore:`
 - PRs: squash-merge to main; delete branch after merge
-- Releases: `git tag vX.Y.Z && git push origin vX.Y.Z` triggers release + Docker publish to GHCR
+- Releases: bump the four version strings `scripts/check_version.sh` checks, merge, then `git tag vX.Y.Z && git push origin vX.Y.Z`. `ci.yml` runs every job on the tag and only then pushes the image and creates the GitHub release
+- Pinned on purpose: the protobufs commit (`PROTOBUFS_REF` in `scripts/download_protobufs.sh`), `requirements.txt`, the Dockerfile base image digest and ruff. Bump them in a PR; never unpin
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for full release workflow details
 
 ## Key Config Options
@@ -119,6 +124,6 @@ These paths exist in working trees but are gitignored. Never stage them:
 - `docs/superpowers/` — planning artifacts written by Claude's superpowers skills
 - `.venv/`, `__pycache__/`, `.pytest_cache/`, `.ruff_cache/`, `coverage*` — Python build/test artefacts
 - `generated/` — Python protobuf stubs (built by `scripts/generate_protos.sh`)
-- `protobufs/meshtastic/` — upstream Meshtastic protobufs (downloaded by `scripts/download_protobufs.sh`); only `protobufs/.gitkeep` and `protobufs/README.md` are tracked
+- `protobufs/meshtastic/`, `protobufs/nanopb.proto`, `protobufs/LICENSE`, `protobufs/.ref` — upstream Meshtastic protobufs at the pinned commit (written by `scripts/download_protobufs.sh`); only `protobufs/README.md` is tracked
 
 Before starting work on a branch, `git fetch origin && git rebase origin/main` to pick up any landed changes to `.gitignore` or shared workflows.

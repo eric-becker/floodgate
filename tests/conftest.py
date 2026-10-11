@@ -21,6 +21,24 @@ if _generated.is_dir() and str(_generated) not in sys.path:
     sys.path.insert(0, str(_generated))
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """With FLOODGATE_NO_SKIPS=1 (set in CI), any skipped test fails the run.
+
+    Protobuf tests skip when the generated stubs are missing; a pipeline that
+    forgets to generate them would otherwise stay green while silently not
+    testing the protobuf path at all.
+    """
+    import os
+    if os.environ.get("FLOODGATE_NO_SKIPS") != "1" or exitstatus != 0:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    skipped = len(reporter.stats.get("skipped", [])) if reporter else 0
+    if skipped:
+        reporter.write_line(
+            f"FLOODGATE_NO_SKIPS=1: {skipped} test(s) skipped; failing the run.", red=True)
+        session.exitstatus = 1
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "integration: requires Docker daemon")
     config.addinivalue_line("markers", "smoke: build and start the container, requires Docker")

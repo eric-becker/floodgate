@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: floodgate
-          image: ghcr.io/eric-becker/floodgate:latest
+          image: ghcr.io/eric-becker/floodgate:0.6.0
           ports:
             - containerPort: 9000
               protocol: TCP
@@ -60,6 +60,8 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
       volumes:
         - name: config
           configMap:
