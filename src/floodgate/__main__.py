@@ -18,15 +18,15 @@ def main():
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {__version__}"
-    )
-    parser.add_argument(
-        "-c", "--config",
+        "-c",
+        "--config",
         help="Path to config.yaml (default: $FLOODGATE_CONFIG or built-in defaults)",
     )
     parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         action="store_true",
         help=(
             "Enable DEBUG logging — very verbose (decode steps, byte counts, gRPC calls). "
@@ -60,6 +60,7 @@ def main():
 
     # Install real handler (potentially JSON), replacing the bootstrap handler
     from .log_setup import configure_logging
+
     configure_logging(log_level, log_format)
     logging.getLogger("floodgate").setLevel(log_level)
 
@@ -67,6 +68,7 @@ def main():
     logger.info("floodgate %s starting", __version__)
 
     from .exhook_server import serve
+
     serve(config)
 
 

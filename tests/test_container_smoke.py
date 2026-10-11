@@ -23,13 +23,14 @@ import urllib.request
 import pytest
 
 IMAGE_TAG = "floodgate-smoke-test:ci"
-HEALTH_PORT = 8089   # high-numbered to avoid collisions with real deployments
+HEALTH_PORT = 8089  # high-numbered to avoid collisions with real deployments
 STARTUP_TIMEOUT = 30  # seconds to wait for /health to become available
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _wait_for_health(url: str, timeout: int = STARTUP_TIMEOUT) -> tuple[int, bytes]:
     """Poll url until it returns HTTP 200 or timeout expires."""
@@ -42,9 +43,7 @@ def _wait_for_health(url: str, timeout: int = STARTUP_TIMEOUT) -> tuple[int, byt
         except Exception as exc:
             last_exc = exc
             time.sleep(1)
-    raise TimeoutError(
-        f"/health did not respond within {timeout}s: {last_exc}"
-    )
+    raise TimeoutError(f"/health did not respond within {timeout}s: {last_exc}")
 
 
 def _docker(*args: str) -> subprocess.CompletedProcess:
@@ -54,6 +53,7 @@ def _docker(*args: str) -> subprocess.CompletedProcess:
 # ---------------------------------------------------------------------------
 # Session-scoped fixtures: build once, reuse across tests in this file
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="session")
 def built_image(tmp_path_factory):
@@ -69,9 +69,12 @@ def built_image(tmp_path_factory):
 def running_container(built_image, tmp_path_factory):
     """Start the container and yield its container ID; stop + remove on teardown."""
     result = _docker(
-        "run", "-d",
-        "--name", "floodgate-smoke",
-        "-p", f"{HEALTH_PORT}:8080",
+        "run",
+        "-d",
+        "--name",
+        "floodgate-smoke",
+        "-p",
+        f"{HEALTH_PORT}:8080",
         built_image,
     )
     if result.returncode != 0:
@@ -96,9 +99,9 @@ def running_container(built_image, tmp_path_factory):
 # Tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.smoke
 class TestContainerSmoke:
-
     def test_health_returns_200(self, running_container):
         status, _ = _wait_for_health(f"http://localhost:{HEALTH_PORT}/health")
         assert status == 200

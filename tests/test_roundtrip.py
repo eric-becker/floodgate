@@ -50,12 +50,12 @@ def _portnum_cases(portnums_pb2):
     case exercises a different Data shape through the same re-serialisation."""
     P = portnums_pb2.PortNum
     return {
-        "text_message":  (P.TEXT_MESSAGE_APP, b"hello mesh"),
-        "position":      (P.POSITION_APP, bytes.fromhex("0d8a5f2e15")),
-        "nodeinfo":      (P.NODEINFO_APP, b"\x0a\x09!12345678"),
-        "telemetry":     (P.TELEMETRY_APP, b"\x0d\x00\x00\x80\x3f"),
-        "neighborinfo":  (P.NEIGHBORINFO_APP, b"\x08\x81\x82\x83\x84\x08"),
-        "range_test":    (P.RANGE_TEST_APP, b"seq 7"),
+        "text_message": (P.TEXT_MESSAGE_APP, b"hello mesh"),
+        "position": (P.POSITION_APP, bytes.fromhex("0d8a5f2e15")),
+        "nodeinfo": (P.NODEINFO_APP, b"\x0a\x09!12345678"),
+        "telemetry": (P.TELEMETRY_APP, b"\x0d\x00\x00\x80\x3f"),
+        "neighborinfo": (P.NEIGHBORINFO_APP, b"\x08\x81\x82\x83\x84\x08"),
+        "range_test": (P.RANGE_TEST_APP, b"seq 7"),
     }
 
 
@@ -70,16 +70,22 @@ def _zerohop_or_fail(envelope_bytes):
 class TestCiphertextSurvivesZerohop:
     """The encrypted blob is payload floodgate has no business touching."""
 
-    @pytest.mark.parametrize("case", ["text_message", "position", "nodeinfo",
-                                      "telemetry", "neighborinfo", "range_test"])
+    @pytest.mark.parametrize(
+        "case", ["text_message", "position", "nodeinfo", "telemetry", "neighborinfo", "range_test"]
+    )
     def test_encrypted_bytes_are_byte_identical(self, meshtastic_pb2, case):  # noqa: F811
         mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
         portnum, payload = _portnum_cases(portnums_pb2)[case]
 
         envelope_bytes = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2, portnum=portnum, payload_bytes=payload,
-            packet_id=PACKET_ID, from_node=FROM_NODE,
-            hop_limit=HOP_LIMIT, hop_start=HOP_START,
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=portnum,
+            payload_bytes=payload,
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            hop_limit=HOP_LIMIT,
+            hop_start=HOP_START,
         )
         before = mqtt_pb2.ServiceEnvelope()
         before.ParseFromString(envelope_bytes)
@@ -102,10 +108,14 @@ class TestCiphertextSurvivesZerohop:
         original.payload = b"the mesh must go on"
 
         envelope_bytes = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2,
-            portnum=original.portnum, payload_bytes=original.payload,
-            packet_id=PACKET_ID, from_node=FROM_NODE,
-            hop_limit=HOP_LIMIT, hop_start=HOP_START,
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=original.portnum,
+            payload_bytes=original.payload,
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            hop_limit=HOP_LIMIT,
+            hop_start=HOP_START,
         )
 
         after = mqtt_pb2.ServiceEnvelope()
@@ -114,11 +124,13 @@ class TestCiphertextSurvivesZerohop:
         # Decrypt using the ids as they survive in the *modified* packet — this
         # is exactly what a receiving node does, so a perturbed id fails here.
         recovered = mesh_pb2.Data()
-        recovered.ParseFromString(decrypt(
-            after.packet.encrypted,
-            packet_id=after.packet.id,
-            from_node=getattr(after.packet, "from"),
-        ))
+        recovered.ParseFromString(
+            decrypt(
+                after.packet.encrypted,
+                packet_id=after.packet.id,
+                from_node=getattr(after.packet, "from"),
+            )
+        )
 
         assert recovered.portnum == original.portnum
         assert recovered.payload == original.payload
@@ -127,10 +139,14 @@ class TestCiphertextSurvivesZerohop:
         """Pin the two fields the nonce is derived from, explicitly."""
         mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
         envelope_bytes = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2,
-            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP, payload_bytes=b"x",
-            packet_id=PACKET_ID, from_node=FROM_NODE,
-            hop_limit=HOP_LIMIT, hop_start=HOP_START,
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+            payload_bytes=b"x",
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            hop_limit=HOP_LIMIT,
+            hop_start=HOP_START,
         )
         after = mqtt_pb2.ServiceEnvelope()
         after.ParseFromString(_zerohop_or_fail(envelope_bytes))
@@ -151,10 +167,14 @@ class TestBlastRadius:
     def test_only_hop_fields_differ(self, meshtastic_pb2):  # noqa: F811
         mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
         envelope_bytes = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2,
-            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP, payload_bytes=b"blast",
-            packet_id=PACKET_ID, from_node=FROM_NODE,
-            hop_limit=HOP_LIMIT, hop_start=HOP_START,
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+            payload_bytes=b"blast",
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            hop_limit=HOP_LIMIT,
+            hop_start=HOP_START,
         )
         before = mqtt_pb2.ServiceEnvelope()
         before.ParseFromString(envelope_bytes)
@@ -176,10 +196,15 @@ class TestBlastRadius:
         """channel_id and gateway_id route the packet — losing them is fatal."""
         mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
         envelope_bytes = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2,
-            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP, payload_bytes=b"meta",
-            packet_id=PACKET_ID, from_node=FROM_NODE, channel_name="LongFast",
-            hop_limit=HOP_LIMIT, hop_start=HOP_START,
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+            payload_bytes=b"meta",
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            channel_name="LongFast",
+            hop_limit=HOP_LIMIT,
+            hop_start=HOP_START,
         )
         after = mqtt_pb2.ServiceEnvelope()
         after.ParseFromString(_zerohop_or_fail(envelope_bytes))
@@ -188,10 +213,14 @@ class TestBlastRadius:
     def test_hop_fields_are_actually_zeroed(self, meshtastic_pb2):  # noqa: F811
         mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
         envelope_bytes = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2,
-            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP, payload_bytes=b"z",
-            packet_id=PACKET_ID, from_node=FROM_NODE,
-            hop_limit=HOP_LIMIT, hop_start=HOP_START,
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+            payload_bytes=b"z",
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            hop_limit=HOP_LIMIT,
+            hop_start=HOP_START,
         )
         after = mqtt_pb2.ServiceEnvelope()
         after.ParseFromString(_zerohop_or_fail(envelope_bytes))
@@ -226,10 +255,14 @@ class TestForwardCompatibility:
     def test_unknown_fields_are_preserved(self, meshtastic_pb2):  # noqa: F811
         mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
         envelope_bytes = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2,
-            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP, payload_bytes=b"future",
-            packet_id=PACKET_ID, from_node=FROM_NODE,
-            hop_limit=HOP_LIMIT, hop_start=HOP_START,
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+            payload_bytes=b"future",
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            hop_limit=HOP_LIMIT,
+            hop_start=HOP_START,
         )
         # Field 900 is not in the ServiceEnvelope schema and won't be soon.
         marker = self._unknown_field(900, b"from-newer-firmware")
@@ -256,20 +289,26 @@ class TestTracerouteFidelity:
         route_bytes = route.SerializeToString()
 
         envelope_bytes = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2,
-            portnum=portnums_pb2.PortNum.TRACEROUTE_APP, payload_bytes=route_bytes,
-            packet_id=PACKET_ID, from_node=FROM_NODE,
-            hop_limit=HOP_LIMIT, hop_start=HOP_START,
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TRACEROUTE_APP,
+            payload_bytes=route_bytes,
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            hop_limit=HOP_LIMIT,
+            hop_start=HOP_START,
         )
         after = mqtt_pb2.ServiceEnvelope()
         after.ParseFromString(_zerohop_or_fail(envelope_bytes))
 
         recovered_data = mesh_pb2.Data()
-        recovered_data.ParseFromString(decrypt(
-            after.packet.encrypted,
-            packet_id=after.packet.id,
-            from_node=getattr(after.packet, "from"),
-        ))
+        recovered_data.ParseFromString(
+            decrypt(
+                after.packet.encrypted,
+                packet_id=after.packet.id,
+                from_node=getattr(after.packet, "from"),
+            )
+        )
         recovered_route = mesh_pb2.RouteDiscovery()
         recovered_route.ParseFromString(recovered_data.payload)
 

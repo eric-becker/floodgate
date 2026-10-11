@@ -6,14 +6,13 @@ from floodgate.decrypt import DEFAULT_KEY, build_nonce, decrypt
 
 
 class TestBuildNonce:
-
     def test_layout_packet_id_first_then_from_then_zero_padding(self):
         # packet_id = 0x0807060504030201, from = 0x0c0b0a09
         nonce = build_nonce(0x0807060504030201, 0x0C0B0A09)
         assert nonce == bytes.fromhex(
-            "0102030405060708"   # packet_id LE
-            "090a0b0c"           # from LE
-            "00000000"           # extra_nonce
+            "0102030405060708"  # packet_id LE
+            "090a0b0c"  # from LE
+            "00000000"  # extra_nonce
         )
 
     def test_length_is_16_bytes(self):
@@ -35,7 +34,6 @@ class TestBuildNonce:
 
 
 class TestDefaultKey:
-
     def test_length_is_16_bytes_aes128(self):
         assert len(DEFAULT_KEY) == 16
 
@@ -50,7 +48,7 @@ class TestDecryptRoundtrip:
     def test_roundtrip_default_key(self):
         plaintext = b"hello meshtastic world"
         ct = decrypt(plaintext, packet_id=12345, from_node=0xDEADBEEF)
-        assert ct != plaintext   # actually encrypted
+        assert ct != plaintext  # actually encrypted
         pt = decrypt(ct, packet_id=12345, from_node=0xDEADBEEF)
         assert pt == plaintext
 
@@ -99,7 +97,8 @@ class TestDecryptRealMeshtasticInterop:
         packet_id, from_node = 0xABCDEF01, 0x12345678
         ciphertext = decrypt(
             original.SerializeToString(),
-            packet_id=packet_id, from_node=from_node,
+            packet_id=packet_id,
+            from_node=from_node,
         )
 
         recovered = mesh_pb2.Data()

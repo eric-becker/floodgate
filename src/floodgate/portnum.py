@@ -21,21 +21,21 @@ logger = logging.getLogger(__name__)
 # range test included, is published with an empty `type` and cannot be
 # identified, so it is delivered.
 _JSON_TYPE_TO_PORTNUM = {
-    "text":             "TEXT_MESSAGE_APP",
-    "telemetry":        "TELEMETRY_APP",
-    "nodeinfo":         "NODEINFO_APP",
-    "position":         "POSITION_APP",
-    "waypoint":         "WAYPOINT_APP",
-    "neighborinfo":     "NEIGHBORINFO_APP",
-    "traceroute":       "TRACEROUTE_APP",
-    "detection":        "DETECTION_SENSOR_APP",
-    "paxcounter":       "PAXCOUNTER_APP",
-    "gpios_changed":    "REMOTE_HARDWARE_APP",
+    "text": "TEXT_MESSAGE_APP",
+    "telemetry": "TELEMETRY_APP",
+    "nodeinfo": "NODEINFO_APP",
+    "position": "POSITION_APP",
+    "waypoint": "WAYPOINT_APP",
+    "neighborinfo": "NEIGHBORINFO_APP",
+    "traceroute": "TRACEROUTE_APP",
+    "detection": "DETECTION_SENSOR_APP",
+    "paxcounter": "PAXCOUNTER_APP",
+    "gpios_changed": "REMOTE_HARDWARE_APP",
     "gpios_read_reply": "REMOTE_HARDWARE_APP",
 }
 
-_mqtt_pb2     = None
-_mesh_pb2     = None
+_mqtt_pb2 = None
+_mesh_pb2 = None
 _portnums_pb2 = None
 
 
@@ -43,8 +43,9 @@ def _load_protos():
     global _mqtt_pb2, _mesh_pb2, _portnums_pb2
     if _mqtt_pb2 is None:
         from meshtastic import mesh_pb2, mqtt_pb2, portnums_pb2
-        _mqtt_pb2     = mqtt_pb2
-        _mesh_pb2     = mesh_pb2
+
+        _mqtt_pb2 = mqtt_pb2
+        _mesh_pb2 = mesh_pb2
         _portnums_pb2 = portnums_pb2
 
 
@@ -72,8 +73,7 @@ def extract_portnum_protobuf(payload: bytes) -> str | None:
         data.ParseFromString(plaintext)
         return _portnums_pb2.PortNum.Name(data.portnum)
     except Exception as exc:
-        logger.debug("portnum extract (proto) failed: %s(%s)",
-                     type(exc).__name__, exc)
+        logger.debug("portnum extract (proto) failed: %s(%s)", type(exc).__name__, exc)
         return None
 
 

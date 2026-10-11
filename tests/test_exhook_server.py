@@ -34,26 +34,30 @@ def _config(**overrides):
 
 def _publish_request(payload: bytes, topic: str = TOPIC):
     msg = exhook_pb2.Message(
-        node="emqx@127.0.0.1", id="0001", qos=1, topic=topic, payload=payload,
-        timestamp=1234567890, headers={"username": "gw"},
+        node="emqx@127.0.0.1",
+        id="0001",
+        qos=1,
+        topic=topic,
+        payload=payload,
+        timestamp=1234567890,
+        headers={"username": "gw"},
     )
     setattr(msg, "from", "!aabbccdd")
     return exhook_pb2.MessagePublishRequest(message=msg)
 
 
 class TestOnProviderLoaded:
-
     def test_registers_only_message_publish_with_configured_filter(self):
         servicer = HookProviderServicer(_config(topic_filter="msh/US/#"))
         request = exhook_pb2.ProviderLoadedRequest(
-            broker=exhook_pb2.BrokerInfo(version="6.2.0", sysdescr="EMQX"))
+            broker=exhook_pb2.BrokerInfo(version="6.2.0", sysdescr="EMQX")
+        )
         resp = servicer.OnProviderLoaded(request, None)
         assert [h.name for h in resp.hooks] == ["message.publish"]
         assert list(resp.hooks[0].topics) == ["msh/US/#"]
 
 
 class TestOnMessagePublish:
-
     def test_modify_replaces_payload_and_keeps_everything_else(self):
         servicer = HookProviderServicer(_config())
         payload = json.dumps({"id": 1, "hop_start": 3, "hops_away": 0}).encode()
@@ -72,10 +76,13 @@ class TestOnMessagePublish:
         assert dict(out.headers) == {"username": "gw"}
 
     def test_drop_denies_with_allow_publish_false_and_original_payload(self):
-        servicer = HookProviderServicer(_config(
-            drop_enabled=True, _drop_channels_set={"LongFast"},
-            _drop_portnums_set={"TEXT_MESSAGE_APP"},
-        ))
+        servicer = HookProviderServicer(
+            _config(
+                drop_enabled=True,
+                _drop_channels_set={"LongFast"},
+                _drop_portnums_set={"TEXT_MESSAGE_APP"},
+            )
+        )
         payload = json.dumps({"id": 1, "type": "text", "hop_start": 3, "hops_away": 0}).encode()
         request = _publish_request(payload)
 
@@ -107,16 +114,17 @@ class TestOnMessagePublish:
 
     def test_dispatches_on_process_result(self):
         servicer = HookProviderServicer(_config())
-        with patch("floodgate.exhook_server.process_message",
-                   return_value=ProcessResult.modify(b"NEW")):
+        with patch(
+            "floodgate.exhook_server.process_message", return_value=ProcessResult.modify(b"NEW")
+        ):
             resp = servicer.OnMessagePublish(_publish_request(b"OLD"), None)
         assert resp.message.payload == b"NEW"
 
 
 class TestStatsReporter:
-
     class _OneShotEvent:
         """Stands in for threading.Event: one interval elapses, then stop."""
+
         def __init__(self):
             self.calls = 0
 
@@ -126,6 +134,7 @@ class TestStatsReporter:
 
     def test_logs_and_resets_rolling_counters_each_interval(self, caplog):
         from floodgate.zerohop import stats
+
         stats.reset()
         stats.inc("zerohop")
         stats.inc("dropped")
@@ -143,6 +152,7 @@ class TestStatsReporter:
 
     def test_stats_log_false_resets_without_logging(self, caplog):
         from floodgate.zerohop import stats
+
         stats.reset()
         stats.inc("passthru")
         with caplog.at_level("INFO", logger="floodgate.exhook_server"):

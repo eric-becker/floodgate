@@ -16,6 +16,7 @@ def _load_protos():
     if _mqtt_pb2 is None:
         try:
             from meshtastic import mesh_pb2, mqtt_pb2
+
             _mqtt_pb2 = mqtt_pb2
             _mesh_pb2 = mesh_pb2
         except ImportError:
@@ -33,9 +34,9 @@ def _load_protos():
 # `process_message` returns one of these so the gRPC layer can translate
 # directly into an EMQX response without re-deriving intent. Strings (not
 # enums) keep log records and tests legible.
-ACTION_PASSTHRU = "passthru"   # deliver the original message unchanged
-ACTION_MODIFY   = "modify"     # deliver the modified payload (zerohop)
-ACTION_DROP     = "drop"       # deny the publish entirely
+ACTION_PASSTHRU = "passthru"  # deliver the original message unchanged
+ACTION_MODIFY = "modify"  # deliver the modified payload (zerohop)
+ACTION_DROP = "drop"  # deny the publish entirely
 
 
 @dataclass
@@ -44,7 +45,8 @@ class ProcessResult:
 
     `payload` is only meaningful when `action == ACTION_MODIFY`.
     """
-    action:  str
+
+    action: str
     payload: bytes | None = None
 
     @classmethod
@@ -74,12 +76,13 @@ class AntifloodStats:
     Two views: rolling (reset every stats interval, surfaced in periodic
     logs) and lifetime (cumulative, surfaced via /health).
     """
-    zerohop:  int = 0
+
+    zerohop: int = 0
     passthru: int = 0
-    noop:     int = 0
-    dropped:  int = 0
-    skipped:  int = 0
-    errors:   int = 0
+    noop: int = 0
+    dropped: int = 0
+    skipped: int = 0
+    errors: int = 0
 
     _lifetime: dict = field(default_factory=lambda: {k: 0 for k in _COUNTER_NAMES})
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -118,6 +121,7 @@ stats = AntifloodStats()
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _fmt_node(node_id) -> str:
     """Format a Meshtastic node ID as !hex."""
     if node_id is None:
@@ -130,6 +134,7 @@ def _fmt_node(node_id) -> str:
 # ---------------------------------------------------------------------------
 # Topic parsing
 # ---------------------------------------------------------------------------
+
 
 def parse_meshtastic_topic(topic: str) -> tuple[str, str] | None:
     """Parse a Meshtastic MQTT topic and return (channel, encoding) if it is a
@@ -165,15 +170,20 @@ def parse_meshtastic_topic(topic: str) -> tuple[str, str] | None:
 # Payload modification
 # ---------------------------------------------------------------------------
 
+
 def _peek_meta(encoding: str, payload: bytes) -> dict:
     """Parse packet metadata without modifying the payload. Best-effort."""
     if encoding == "json":
         try:
             data = _json.loads(payload)
             meta = {}
-            for src_key, meta_key in [("id", "packet_id"), ("from", "sender"),
-                                       ("to", "destination"), ("hop_start", "hop_start"),
-                                       ("via_mqtt", "via_mqtt")]:
+            for src_key, meta_key in [
+                ("id", "packet_id"),
+                ("from", "sender"),
+                ("to", "destination"),
+                ("hop_start", "hop_start"),
+                ("via_mqtt", "via_mqtt"),
+            ]:
                 if src_key in data:
                     meta[meta_key] = data[src_key]
             return meta
@@ -200,9 +210,14 @@ def _extract_proto_meta(pkt) -> dict:
     """
     meta = {}
     try:
-        for attr, key in [("id", "packet_id"), ("to", "destination"),
-                          ("hop_start", "hop_start"), ("via_mqtt", "via_mqtt"),
-                          ("relay_node", "relay_node"), ("next_hop", "next_hop")]:
+        for attr, key in [
+            ("id", "packet_id"),
+            ("to", "destination"),
+            ("hop_start", "hop_start"),
+            ("via_mqtt", "via_mqtt"),
+            ("relay_node", "relay_node"),
+            ("next_hop", "next_hop"),
+        ]:
             try:
                 val = getattr(pkt, attr, None)
                 if val is not None:
@@ -244,8 +259,11 @@ def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
     try:
         envelope = _mqtt_pb2.ServiceEnvelope()
         envelope.ParseFromString(payload)
-        logger.debug("zerohop_protobuf: parsed %d bytes, has_packet=%s",
-                     len(payload), envelope.HasField("packet"))
+        logger.debug(
+            "zerohop_protobuf: parsed %d bytes, has_packet=%s",
+            len(payload),
+            envelope.HasField("packet"),
+        )
 
         if not envelope.HasField("packet"):
             logger.debug("ServiceEnvelope has no packet field")
@@ -266,8 +284,12 @@ def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
         logger.debug("zerohop_protobuf: serialized %d bytes", len(modified))
 
     except Exception as exc:
-        logger.warning("Failed to parse protobuf payload (%d bytes): %s(%s)",
-                       len(payload), type(exc).__name__, exc)
+        logger.warning(
+            "Failed to parse protobuf payload (%d bytes): %s(%s)",
+            len(payload),
+            type(exc).__name__,
+            exc,
+        )
         return None, None, {}
 
     return modified, old_hop, meta
@@ -288,25 +310,35 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
     try:
         data = _json.loads(payload)
     except Exception as exc:
-        logger.warning("Failed to parse JSON payload (%d bytes): %s(%s)",
-                       len(payload), type(exc).__name__, exc)
+        logger.warning(
+            "Failed to parse JSON payload (%d bytes): %s(%s)", len(payload), type(exc).__name__, exc
+        )
         return None, None, {}
     if not isinstance(data, dict):
-        logger.warning("JSON payload is a %s, not an object (%d bytes)",
-                       type(data).__name__, len(payload))
+        logger.warning(
+            "JSON payload is a %s, not an object (%d bytes)", type(data).__name__, len(payload)
+        )
         return None, None, {}
-    bad = [k for k in ("hop_limit", "hop_start", "hops_away")
-           if k in data and (isinstance(data[k], bool) or not isinstance(data[k], int))]
+    bad = [
+        k
+        for k in ("hop_limit", "hop_start", "hops_away")
+        if k in data and (isinstance(data[k], bool) or not isinstance(data[k], int))
+    ]
     if bad:
-        logger.warning("JSON hop field(s) not integers: %s",
-                       ", ".join(f"{k}={data[k]!r}" for k in bad))
+        logger.warning(
+            "JSON hop field(s) not integers: %s", ", ".join(f"{k}={data[k]!r}" for k in bad)
+        )
         return None, None, {}
     logger.debug("zerohop_json: parsed %d bytes, keys=%s", len(payload), list(data.keys()))
 
     meta = {}
-    for src_key, meta_key in [("id", "packet_id"), ("from", "sender"),
-                               ("to", "destination"), ("hop_start", "hop_start"),
-                               ("via_mqtt", "via_mqtt")]:
+    for src_key, meta_key in [
+        ("id", "packet_id"),
+        ("from", "sender"),
+        ("to", "destination"),
+        ("hop_start", "hop_start"),
+        ("via_mqtt", "via_mqtt"),
+    ]:
         if src_key in data:
             meta[meta_key] = data[src_key]
 
@@ -338,6 +370,7 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
+
 def process_message(topic: str, payload: bytes, config: dict) -> ProcessResult:
     """Process one MQTT message; return a ProcessResult describing the action.
 
@@ -350,7 +383,9 @@ def process_message(topic: str, payload: bytes, config: dict) -> ProcessResult:
         stats.inc("errors")
         logger.error(
             "Unhandled exception processing topic=%s: %s(%s)",
-            topic, type(exc).__name__, exc,
+            topic,
+            type(exc).__name__,
+            exc,
             exc_info=True,
         )
         return ProcessResult.passthru()
@@ -371,23 +406,26 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> ProcessR
 
     # ---- Drop check (runs before zerohop) ----
     if config.get("drop_enabled"):
-        portnum = (extract_portnum_json(payload) if encoding == "json"
-                   else extract_portnum_protobuf(payload))
+        portnum = (
+            extract_portnum_json(payload)
+            if encoding == "json"
+            else extract_portnum_protobuf(payload)
+        )
         if should_drop(config, channel, portnum):
             stats.inc("dropped")
             meta = _peek_meta(encoding, payload)
             logger.info(
                 "dropped",
                 extra={
-                    "event":    "message",
-                    "outcome":  "dropped",
-                    "topic":    topic,
-                    "channel":  channel,
+                    "event": "message",
+                    "outcome": "dropped",
+                    "topic": topic,
+                    "channel": channel,
                     "encoding": encoding,
-                    "portnum":  portnum,
-                    "id":       meta.get("packet_id"),
-                    "from":     _fmt_node(meta.get("sender")),
-                    "to":       _fmt_node(meta.get("destination")),
+                    "portnum": portnum,
+                    "id": meta.get("packet_id"),
+                    "from": _fmt_node(meta.get("sender")),
+                    "to": _fmt_node(meta.get("destination")),
                 },
             )
             return ProcessResult.drop()
@@ -400,17 +438,17 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> ProcessR
         logger.info(
             "passthru",
             extra={
-                "event":     "message",
-                "outcome":   "passthru",
-                "topic":     topic,
-                "channel":   channel,
-                "encoding":  encoding,
-                "id":        meta.get("packet_id"),
-                "from":      _fmt_node(meta.get("sender")),
-                "to":        _fmt_node(meta.get("destination")),
+                "event": "message",
+                "outcome": "passthru",
+                "topic": topic,
+                "channel": channel,
+                "encoding": encoding,
+                "id": meta.get("packet_id"),
+                "from": _fmt_node(meta.get("sender")),
+                "to": _fmt_node(meta.get("destination")),
                 "hop_start": meta.get("hop_start"),
-                "relay":     f"{relay & 0xFF:02x}" if relay else None,
-                "via_mqtt":  meta.get("via_mqtt"),
+                "relay": f"{relay & 0xFF:02x}" if relay else None,
+                "via_mqtt": meta.get("via_mqtt"),
             },
         )
         return ProcessResult.passthru()
@@ -425,12 +463,12 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> ProcessR
         logger.warning(
             "warn",
             extra={
-                "event":    "message",
-                "outcome":  "warn",
-                "topic":    topic,
-                "channel":  channel,
+                "event": "message",
+                "outcome": "warn",
+                "topic": topic,
+                "channel": channel,
                 "encoding": encoding,
-                "bytes":    len(payload),
+                "bytes": len(payload),
             },
         )
         return ProcessResult.passthru()
@@ -441,18 +479,18 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> ProcessR
         logger.info(
             "noop",
             extra={
-                "event":     "message",
-                "outcome":   "noop",
-                "topic":     topic,
-                "channel":   channel,
-                "encoding":  encoding,
-                "id":        meta.get("packet_id"),
-                "from":      _fmt_node(meta.get("sender")),
-                "to":        _fmt_node(meta.get("destination")),
+                "event": "message",
+                "outcome": "noop",
+                "topic": topic,
+                "channel": channel,
+                "encoding": encoding,
+                "id": meta.get("packet_id"),
+                "from": _fmt_node(meta.get("sender")),
+                "to": _fmt_node(meta.get("destination")),
                 "hop_limit": 0,
                 "hop_start": meta.get("hop_start"),
-                "relay":     f"{relay & 0xFF:02x}" if relay else None,
-                "via_mqtt":  meta.get("via_mqtt"),
+                "relay": f"{relay & 0xFF:02x}" if relay else None,
+                "via_mqtt": meta.get("via_mqtt"),
             },
         )
         return ProcessResult.passthru()
@@ -462,18 +500,18 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> ProcessR
     logger.info(
         "zerohop",
         extra={
-            "event":     "message",
-            "outcome":   "zerohop",
-            "topic":     topic,
-            "channel":   channel,
-            "encoding":  encoding,
-            "id":        meta.get("packet_id"),
-            "from":      _fmt_node(meta.get("sender")),
-            "to":        _fmt_node(meta.get("destination")),
+            "event": "message",
+            "outcome": "zerohop",
+            "topic": topic,
+            "channel": channel,
+            "encoding": encoding,
+            "id": meta.get("packet_id"),
+            "from": _fmt_node(meta.get("sender")),
+            "to": _fmt_node(meta.get("destination")),
             "hop_limit": old_hop,
             "hop_start": meta.get("hop_start"),
-            "relay":     f"{relay & 0xFF:02x}" if relay else None,
-            "via_mqtt":  meta.get("via_mqtt"),
+            "relay": f"{relay & 0xFF:02x}" if relay else None,
+            "via_mqtt": meta.get("via_mqtt"),
         },
     )
     return ProcessResult.modify(modified)
