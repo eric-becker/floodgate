@@ -28,8 +28,7 @@ def build_nonce(packet_id: int, from_node: int) -> bytes:
     )
 
 
-def decrypt(ciphertext: bytes, packet_id: int, from_node: int,
-            key: bytes = DEFAULT_KEY) -> bytes:
+def decrypt(ciphertext: bytes, packet_id: int, from_node: int, key: bytes = DEFAULT_KEY) -> bytes:
     """AES-128-CTR decrypt a Meshtastic encrypted payload.
 
     AES-CTR is symmetric: this same call also encrypts. With a wrong key

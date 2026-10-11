@@ -15,15 +15,18 @@ All PRs are squash-merged. One PR per feature or fix.
 
 ## CI jobs
 
-Every PR and push to `main` runs five jobs in sequence:
+Every pull request, push to `main` and release tag runs one workflow, `.github/workflows/ci.yml`. Nothing is published unless every test job passes.
 
 | Job | What it checks |
 |-----|----------------|
-| **lint** | `ruff` style and import checks |
-| **unit tests** | Pure Python tests across Python 3.11/3.12/3.13 — no external services needed. CI generates the Meshtastic protobuf stubs before running so the unmocked protobuf payload tests in `tests/payloads/protobuf/` are exercised. Mocked tests in the rest of the suite still run without protobufs (handy for fast local iteration). |
-| **container smoke** | Builds the Docker image, starts the container, and verifies `/health` returns `200 OK`. Catches Dockerfile bugs and runtime import errors that unit tests cannot. |
-| **integration** | Brings up `docker-compose.test.yaml` (EMQX + floodgate + test-driver) and runs `drop` / `zerohop` / `passthru` / `noop` / `custom-key passthru` end-to-end. See "Integration testing" below. |
-| **manifest validation** | Validates `k8s/*.yaml` against the Kubernetes schema with `kubeconform`. |
+| **version** | `scripts/check_version.sh`: `pyproject.toml`, `__version__`, the chart's `appVersion` and the `k8s/deployment.yaml` image tag agree, and on a tag push they match the tag. |
+| **lint** | `ruff check` and `ruff format --check`, with the ruff version pinned in `pyproject.toml`. |
+| **test** | Unit tests on Python 3.11, 3.12 and 3.13, with the Meshtastic stubs generated at the pinned protobufs commit. `FLOODGATE_NO_SKIPS=1` makes any skipped test fail the run, so missing stubs can't silently disable the protobuf tests. |
+| **smoke** | Builds the image, starts it, and checks `/health`. Catches Dockerfile bugs and runtime import errors. |
+| **integration** | `scripts/run-integration.sh`: EMQX, floodgate and a real `meshtasticd` node in Docker Compose. See "Integration testing" below. |
+| **manifests** | `kubeconform` on `k8s/*.yaml` and two rendered chart variants, `helm lint`, and `scripts/check_chart.py`, which loads the rendered ConfigMap with floodgate's own config loader and checks the rollout settings that contain a bad config. |
+| **image** | Multi-arch (amd64, arm64) build after all of the above. Pushed only for `main` and release tags; pull requests build without pushing. |
+| **release** | On a release tag, after the image is pushed: a GitHub release with generated notes. |
 
 ### Running locally
 
@@ -45,15 +48,16 @@ pytest tests/ --ignore=tests/test_container_smoke.py --cov=src/floodgate --cov-r
 # Container smoke tests (requires Docker)
 pytest tests/test_container_smoke.py -m smoke -v
 
-# Lint
-ruff check src/ tests/
+# Lint and formatting (CI fails on either)
+ruff check .
+ruff format --check .      # `ruff format .` to fix
 ```
 
 ### Integration testing
 
-The integration harness (`scripts/run-integration.sh`) brings up a full Docker Compose stack — EMQX + floodgate + an ExHook auto-registration container + a Python test-driver — on an isolated bridge network and runs end-to-end checks for `drop`, `zerohop`, `passthru`, `noop`, and `custom-key channel passthru`. The test-driver crafts real Meshtastic `ServiceEnvelope` protobufs (using the same `meshtastic` Python library the firmware uses internally), so each case exercises the exact wire format floodgate sees in production.
+The integration harness (`scripts/run-integration.sh`) brings up a full Docker Compose stack — EMQX, floodgate, an ExHook registration container, a real `meshtasticd` node (`mesh-sim`) and a Python test-driver — on an isolated bridge network, and runs four passes: `default` (zerohop, drop, passthru, noop, custom-key-not-dropped, json-zerohop), `hook-down` (floodgate stopped: fails open), `recovery`, and `firmware` (the real node accepts zero-hopped packets; traceroute has no ghost hops). The test-driver builds `ServiceEnvelope`s with the `meshtastic` Python package's generated protobufs — the same schema as firmware — so each case exercises the wire format floodgate sees in production. See [tests/integration/README.md](tests/integration/README.md) for what each pass proves.
 
-Each case verifies BOTH what the subscriber received (delivered MQTT bytes) AND floodgate's `/health` stats — a behavior change with no stat increment, or a stat increment with no delivery effect, both fail the case. One PASS or FAIL line is printed per case.
+The `default` cases check both what the subscriber received and floodgate's `/health` deltas; `hook-down` checks EMQX's ExHook `metrics.failed`, `recovery` checks delivered hop fields, and `firmware` checks what the node accepted. One PASS or FAIL line is printed per case.
 
 Requirements: `docker` and `bash`. The `pytest` suite never runs the harness — it's opt-in via the script.
 
@@ -78,48 +82,46 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`
 
 ## Branching strategy
 
-- `main` — stable, tagged releases only
+- `main` — always releasable; releases are tags on `main`
 - Feature branches: `feat/<name>`, `fix/<name>`, `docs/<name>`, `chore/<name>`
 - Branch from `main`, PR back to `main`, squash-merge
 - Delete feature branches after merge (GitHub auto-deletes remote; clean local with `git branch -d`)
 
 ## Release workflow
 
-Releases use semantic versioning (`v0.2.1`, `v1.0.0`, etc.).
+Releases use semantic versioning. Before 1.0, a **minor** release may change the config schema (0.3.0 renamed keys; 0.5.0 and 0.6.0 tightened validation), so read the release notes before upgrading.
 
 ### Steps
 
-1. Merge PR(s) to `main`
-2. Tag the release:
+1. In a PR, bump the version in all four places `scripts/check_version.sh` checks: `pyproject.toml`, `src/floodgate/__init__.py`, `charts/floodgate/Chart.yaml` (`appVersion`) and the image tag in `k8s/deployment.yaml`. If anything under `charts/` changed, also bump the chart's own `version`. Merge it.
+2. Tag the merge commit:
    ```bash
    git checkout main && git pull
    git tag v0.X.Y
    git push origin v0.X.Y
    ```
-3. Two workflows trigger automatically on tag push:
-   - **Release** (`release.yml`): lint → test → smoke → creates a GitHub Release with auto-generated notes
-   - **Docker** (`docker-publish.yml`): builds multi-arch image (amd64 + arm64) and pushes to `ghcr.io/eric-becker/floodgate:<version>`
-4. Update downstream deployments to reference the new image tag
+3. CI runs every job on the tag. If they all pass, it pushes the image and creates the GitHub release. A failing job publishes nothing; fix forward with a new patch version rather than moving the tag.
+4. Update downstream deployments to the new image tag.
 
 ### What gets published
 
 | Trigger | Image tags pushed to GHCR |
 |---------|---------------------------|
 | Push to `main` | `latest` |
-| Tag `v0.2.1` | `0.2.1`, `0.2`, `latest` |
-| PR (build-only) | `pr-<number>` (not pushed) |
+| Tag `v0.6.1` | `0.6.1`, `0.6` |
+| Pull request | nothing (built only) |
 
-### Version bumping
+`latest` and a release tag of the same commit come from separate builds, so their digests differ. Deployments should pin a release tag.
 
-- Patch (`v0.2.0` → `v0.2.1`): bug fixes, logging changes, config additions
-- Minor (`v0.2.1` → `v0.3.0`): new features, behavior changes
-- Major (`v0.3.0` → `v1.0.0`): breaking config or API changes
+### Dependencies
 
-The version in `pyproject.toml` is the Python package version and does not need to match the Docker image tag — the git tag is the source of truth for releases.
+`requirements.txt` (the image's runtime dependencies), `requirements-build.txt` (`grpcio-tools`, builder stage only) and the Dockerfile's base image are pinned exactly. CI installs with both requirements files as constraints, so the tests run against the versions the image ships. Dependabot proposes monthly bumps for pip, Docker and GitHub Actions, and CI decides. `pyproject.toml` keeps looser ranges for source installs, and pins ruff, which CI reads from there.
 
 ## Protobuf compatibility
 
-floodgate targets compatibility with the Meshtastic protobuf schema as published at
-[meshtastic/protobufs](https://github.com/meshtastic/protobufs). If a schema change breaks
-something, open an issue with the affected `ServiceEnvelope` fields and the version where the
-regression was introduced.
+floodgate compiles the Meshtastic protobuf schema from
+[meshtastic/protobufs](https://github.com/meshtastic/protobufs) at the commit pinned in
+`scripts/download_protobufs.sh` (`PROTOBUFS_REF`), so every build uses the same schema. To move to a
+newer schema, bump that commit in a PR and let the full suite (including the firmware integration
+tier) run. If a schema change breaks something, open an issue with the affected `ServiceEnvelope`
+fields and the commit where the regression was introduced.

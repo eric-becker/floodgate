@@ -1,17 +1,20 @@
 """Integration test driver.
 
-Runs each integration case sequentially. For every case:
-  1. Crafts a Meshtastic ServiceEnvelope (or borrows one from meshtasticd).
+Runs one case set (CASE_SET) sequentially. For every case:
+  1. Crafts a Meshtastic ServiceEnvelope (or a JSON packet).
   2. Publishes it via MQTT to a topic whose channel name fits the case.
   3. Waits briefly for floodgate to process and EMQX to deliver.
-  4. Asserts on (a) what the bound subscriber received and (b) floodgate's
-     /health stats, then prints one 'PASS: <case>' or 'FAIL: <case>: <reason>' line.
+  4. Asserts on what the bound subscriber received, plus, depending on the
+     set: floodgate's /health stats (default), EMQX ExHook metrics
+     (hook-down), or what a real meshtasticd node accepted (firmware).
+     Prints one 'PASS: <case>' or 'FAIL: <case>: <reason>' line.
 
 Exits 0 iff every case passed.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -28,15 +31,15 @@ from meshtastic import (  # noqa: F401  (portnums re-exported for cases)
     telemetry_pb2,
 )
 
-EMQX_HOST           = os.environ.get("EMQX_HOST", "emqx")
-EMQX_PORT           = int(os.environ.get("EMQX_PORT", "1883"))
-FLOODGATE_HEALTH    = os.environ.get("FLOODGATE_HEALTH_URL", "http://floodgate:8080/health")
+EMQX_HOST = os.environ.get("EMQX_HOST", "emqx")
+EMQX_PORT = int(os.environ.get("EMQX_PORT", "1883"))
+FLOODGATE_HEALTH = os.environ.get("FLOODGATE_HEALTH_URL", "http://floodgate:8080/health")
 
 # 16-byte AES-128 key derived from the default Meshtastic PSK ("AQ==").
 DEFAULT_KEY = bytes.fromhex("d4f1bb3a20290759f0bcffabcf4e6901")
 # Arbitrary 16-byte key that floodgate does NOT have — used to simulate a
 # custom-keyed channel where floodgate cannot decrypt the inner Data.
-CUSTOM_KEY  = bytes.fromhex("00112233445566778899aabbccddeeff")
+CUSTOM_KEY = bytes.fromhex("00112233445566778899aabbccddeeff")
 
 # Settle window between publish and assertion. EMQX + floodgate gRPC + EMQX
 # delivery is normally <100ms on a local bridge; 1s gives plenty of margin
@@ -51,10 +54,10 @@ HOOK_FAILURE_SETTLE_SECONDS = float(os.environ.get("HOOK_FAILURE_SETTLE_SECONDS"
 
 # EMQX REST, used only to read ExHook metrics. These are the harness's own
 # throwaway dashboard defaults, matching tests/integration/exhook-init.
-EMQX_API   = os.environ.get("EMQX_API_URL", "http://emqx:18083")
-EMQX_USER  = os.environ.get("EMQX_USER", "admin")
-EMQX_PASS  = os.environ.get("EMQX_PASS", "public")
-HOOK_NAME  = os.environ.get("HOOK_NAME", "floodgate")
+EMQX_API = os.environ.get("EMQX_API_URL", "http://emqx:18083")
+EMQX_USER = os.environ.get("EMQX_USER", "admin")
+EMQX_PASS = os.environ.get("EMQX_PASS", "public")
+HOOK_NAME = os.environ.get("HOOK_NAME", "floodgate")
 
 
 def exhook_failed_count() -> int | None:
@@ -87,9 +90,10 @@ def exhook_failed_count() -> int | None:
 # Subscriber capture
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Captured:
-    topic:   str
+    topic: str
     payload: bytes
 
 
@@ -106,6 +110,11 @@ class Subscriber:
             client_id="floodgate-test-driver-sub",
         )
         self._client.on_message = self._on_message
+        self._client.on_subscribe = self._on_subscribe
+        self._subscribed = threading.Event()
+
+    def _on_subscribe(self, _client, _userdata, _mid, _reason_codes, _properties):
+        self._subscribed.set()
 
     def _on_message(self, _client, _userdata, msg):
         with self._lock:
@@ -115,8 +124,9 @@ class Subscriber:
         self._client.connect(self._host, self._port, keepalive=30)
         self._client.subscribe("msh/#", qos=0)
         self._client.loop_start()
-        # Give EMQX a moment to register the subscription before we publish.
-        time.sleep(0.5)
+        # Publish nothing until EMQX has acknowledged the subscription.
+        if not self._subscribed.wait(timeout=10):
+            raise RuntimeError("EMQX did not acknowledge the msh/# subscription")
 
     def stop(self):
         self._client.loop_stop()
@@ -130,6 +140,7 @@ class Subscriber:
 # ---------------------------------------------------------------------------
 # Publisher
 # ---------------------------------------------------------------------------
+
 
 class Publisher:
     def __init__(self, host: str, port: int):
@@ -153,6 +164,7 @@ class Publisher:
 # Crypto / packet builders
 # ---------------------------------------------------------------------------
 
+
 def _build_nonce(packet_id: int, from_node: int) -> bytes:
     return (
         (packet_id & 0xFFFFFFFFFFFFFFFF).to_bytes(8, "little")
@@ -168,16 +180,16 @@ def encrypt(plaintext: bytes, key: bytes, packet_id: int, from_node: int) -> byt
 
 def build_envelope(
     *,
-    channel:   str,
-    portnum:   int,
-    payload:   bytes,
+    channel: str,
+    portnum: int,
+    payload: bytes,
     packet_id: int,
     from_node: int,
-    to_node:   int       = 0xFFFFFFFF,
-    hop_limit: int       = 3,
-    hop_start: int       = 3,
-    key:       bytes     = DEFAULT_KEY,
-    bitfield:  int | None = 1,
+    to_node: int = 0xFFFFFFFF,
+    hop_limit: int = 3,
+    hop_start: int = 3,
+    key: bytes = DEFAULT_KEY,
+    bitfield: int | None = 1,
     want_response: bool = False,
     channel_hash: int = 0,
 ) -> bytes:
@@ -195,13 +207,12 @@ def build_envelope(
     if bitfield is not None:
         data.bitfield = bitfield
     data.want_response = want_response
-    encrypted = encrypt(data.SerializeToString(), key=key,
-                        packet_id=packet_id, from_node=from_node)
+    encrypted = encrypt(data.SerializeToString(), key=key, packet_id=packet_id, from_node=from_node)
 
     pkt = mesh_pb2.MeshPacket()
-    setattr(pkt, "from", from_node)   # 'from' is a Python keyword
-    pkt.to        = to_node
-    pkt.id        = packet_id
+    setattr(pkt, "from", from_node)  # 'from' is a Python keyword
+    pkt.to = to_node
+    pkt.id = packet_id
     pkt.hop_limit = hop_limit
     pkt.hop_start = hop_start
     # Firmware maps an incoming packet to a channel by this hash and rejects it
@@ -212,8 +223,8 @@ def build_envelope(
 
     env = mqtt_pb2.ServiceEnvelope()
     env.packet.CopyFrom(pkt)
-    env.channel_id  = channel
-    env.gateway_id  = "!00000001"
+    env.channel_id = channel
+    env.gateway_id = "!00000001"
     return env.SerializeToString()
 
 
@@ -224,6 +235,7 @@ def topic_for(channel: str, *, gateway: str = "!00000001") -> str:
 # ---------------------------------------------------------------------------
 # Health-stats reader
 # ---------------------------------------------------------------------------
+
 
 def health_stats() -> dict:
     resp = requests.get(FLOODGATE_HEALTH, timeout=5)
@@ -236,14 +248,16 @@ def health_stats() -> dict:
 # bytes back out of the subscriber's capture buffer).
 # ---------------------------------------------------------------------------
 
+
 def decrypt_payload(packet) -> bytes:
     """Decrypt a MeshPacket's payload with the default key.
 
     The nonce is built from packet id + sender, both of which live outside the
     ciphertext - so this only works if floodgate left them alone.
     """
-    return encrypt(packet.encrypted, key=DEFAULT_KEY,
-                   packet_id=packet.id, from_node=getattr(packet, "from"))
+    return encrypt(
+        packet.encrypted, key=DEFAULT_KEY, packet_id=packet.id, from_node=getattr(packet, "from")
+    )
 
 
 def _parse_hop_limit(payload: bytes) -> int | None:
@@ -276,14 +290,15 @@ def _packet_id_of(payload: bytes) -> int | None:
 
 
 # ---------------------------------------------------------------------------
-# Test-case orchestration scaffold (cases filled in later tasks)
+# Test cases
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class Outcome:
-    name:   str
+    name: str
     passed: bool = True
-    detail: str  = ""
+    detail: str = ""
 
     def line(self) -> str:
         prefix = "PASS" if self.passed else "FAIL"
@@ -295,13 +310,13 @@ def case_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
     pre = health_stats()
     pkt_id = 0xA1A1A1A1
     body = build_envelope(
-        channel   = "LongFast",
-        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
-        payload   = b"hello-zerohop",
-        packet_id = pkt_id,
-        from_node = 0xDEADBEEF,
-        hop_limit = 3,
-        hop_start = 3,
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload=b"hello-zerohop",
+        packet_id=pkt_id,
+        from_node=0xDEADBEEF,
+        hop_limit=3,
+        hop_start=3,
     )
     pub.publish(topic_for("LongFast"), body)
     time.sleep(SETTLE_SECONDS)
@@ -314,8 +329,7 @@ def case_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
         return Outcome(name, False, f"delivered hop_limit={hop}, expected 0")
     hop_start = _parse_hop_start(delivered[-1].payload)
     if hop_start != 0:
-        return Outcome(name, False,
-                       f"delivered hop_start={hop_start}, expected 0 (#46)")
+        return Outcome(name, False, f"delivered hop_start={hop_start}, expected 0 (#46)")
 
     post = health_stats()
     if post.get("zerohop", 0) - pre.get("zerohop", 0) < 1:
@@ -328,21 +342,24 @@ def case_drop(pub: Publisher, sub: Subscriber) -> Outcome:
     pre = health_stats()
     pkt_id = 0xA2A2A2A2
     body = build_envelope(
-        channel   = "LongFast",
-        portnum   = portnums_pb2.PortNum.RANGE_TEST_APP,
-        payload   = b"flood",
-        packet_id = pkt_id,
-        from_node = 0xDEADBEEF,
-        hop_limit = 3,
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.RANGE_TEST_APP,
+        payload=b"flood",
+        packet_id=pkt_id,
+        from_node=0xDEADBEEF,
+        hop_limit=3,
     )
     pub.publish(topic_for("LongFast"), body)
     time.sleep(SETTLE_SECONDS)
 
     delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
     if delivered:
-        return Outcome(name, False,
-                       f"packet was delivered to subscriber ({len(delivered)} times); "
-                       "drop should have denied it")
+        return Outcome(
+            name,
+            False,
+            f"packet was delivered to subscriber ({len(delivered)} times); "
+            "drop should have denied it",
+        )
 
     post = health_stats()
     if post.get("dropped", 0) - pre.get("dropped", 0) < 1:
@@ -356,13 +373,13 @@ def case_passthru(pub: Publisher, sub: Subscriber) -> Outcome:
     pre = health_stats()
     pkt_id = 0xA3A3A3A3
     body = build_envelope(
-        channel   = "PrivateClear",
-        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
-        payload   = b"hello-private",
-        packet_id = pkt_id,
-        from_node = 0xDEADBEEF,
-        hop_limit = 3,
-        key       = DEFAULT_KEY,
+        channel="PrivateClear",
+        portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload=b"hello-private",
+        packet_id=pkt_id,
+        from_node=0xDEADBEEF,
+        hop_limit=3,
+        key=DEFAULT_KEY,
     )
     pub.publish(topic_for("PrivateClear"), body)
     time.sleep(SETTLE_SECONDS)
@@ -371,8 +388,9 @@ def case_passthru(pub: Publisher, sub: Subscriber) -> Outcome:
     if not delivered:
         return Outcome(name, False, "packet was not delivered to subscriber")
     if delivered[-1].payload != body:
-        return Outcome(name, False,
-                       "delivered payload was modified; passthru must be byte-identical")
+        return Outcome(
+            name, False, "delivered payload was modified; passthru must be byte-identical"
+        )
     hop = _parse_hop_limit(delivered[-1].payload)
     if hop != 3:
         return Outcome(name, False, f"hop_limit={hop}, expected 3 (no zerohop on this channel)")
@@ -389,13 +407,13 @@ def case_noop(pub: Publisher, sub: Subscriber) -> Outcome:
     pre = health_stats()
     pkt_id = 0xA4A4A4A4
     body = build_envelope(
-        channel   = "LongFast",
-        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
-        payload   = b"already-zero",
-        packet_id = pkt_id,
-        from_node = 0xDEADBEEF,
-        hop_limit = 0,
-        hop_start = 3,
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload=b"already-zero",
+        packet_id=pkt_id,
+        from_node=0xDEADBEEF,
+        hop_limit=0,
+        hop_start=3,
     )
     pub.publish(topic_for("LongFast"), body)
     time.sleep(SETTLE_SECONDS)
@@ -412,49 +430,104 @@ def case_noop(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
-def case_custom_key_passthru(pub: Publisher, sub: Subscriber) -> Outcome:
-    """Channel NOT in zerohop_channels, encrypted with a key floodgate doesn't have.
+def case_custom_key_not_dropped(pub: Publisher, sub: Subscriber) -> Outcome:
+    """A custom-keyed packet on a channel IN the drop scope is not dropped.
 
-    floodgate cannot decrypt the inner Data, so it cannot read the portnum.
-    The drop filter must therefore NOT fire even if drop_portnums would
-    otherwise match. Because the channel is not in zerohop_channels, the
-    packet is delivered byte-identically.
+    floodgate decrypts with the default key, so it cannot read this packet's
+    portnum (RANGE_TEST_APP, which drop_portnums lists) and must deliver it.
+    The channel must be in drop scope -- on an out-of-scope channel drop
+    never fires anyway and the case would prove nothing. LongFast is also a
+    zerohop channel, so the packet is zero-hopped with its ciphertext intact.
     """
-    name = "custom-key-passthru"
+    name = "custom-key-not-dropped"
     pre = health_stats()
     pkt_id = 0xA5A5A5A5
     body = build_envelope(
-        channel   = "PrivateNet",
-        portnum   = portnums_pb2.PortNum.RANGE_TEST_APP,  # would match drop_portnums if readable
-        payload   = b"opaque",
-        packet_id = pkt_id,
-        from_node = 0xDEADBEEF,
-        hop_limit = 3,
-        key       = CUSTOM_KEY,
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.RANGE_TEST_APP,  # would be dropped if readable
+        payload=b"opaque",
+        packet_id=pkt_id,
+        from_node=0xDEADBEEF,
+        hop_limit=3,
+        key=CUSTOM_KEY,
     )
-    pub.publish(topic_for("PrivateNet"), body)
+    pub.publish(topic_for("LongFast"), body)
     time.sleep(SETTLE_SECONDS)
 
     delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
     if not delivered:
-        return Outcome(name, False, "packet was not delivered to subscriber")
-    if delivered[-1].payload != body:
-        return Outcome(name, False,
-                       "delivered payload was modified; passthru must be byte-identical")
+        return Outcome(name, False, "packet was not delivered; drop fired on an unreadable portnum")
+    sent, got = mqtt_pb2.ServiceEnvelope(), mqtt_pb2.ServiceEnvelope()
+    sent.ParseFromString(body)
+    got.ParseFromString(delivered[-1].payload)
+    if got.packet.encrypted != sent.packet.encrypted:
+        return Outcome(name, False, "ciphertext changed in transit")
+    if (got.packet.hop_limit, got.packet.hop_start) != (0, 0):
+        return Outcome(
+            name,
+            False,
+            f"hops not zeroed (limit={got.packet.hop_limit} start={got.packet.hop_start})",
+        )
 
     post = health_stats()
-    if post.get("passthru", 0) - pre.get("passthru", 0) < 1:
-        return Outcome(name, False, "stats.passthru did not increment")
     if post.get("dropped", 0) - pre.get("dropped", 0) > 0:
-        return Outcome(name, False,
-                       "stats.dropped incremented; drop must not fire on unreadable portnum")
+        return Outcome(name, False, "stats.dropped incremented")
+    if post.get("zerohop", 0) - pre.get("zerohop", 0) < 1:
+        return Outcome(name, False, "stats.zerohop did not increment")
+    return Outcome(name)
+
+
+def case_json_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
+    """A JSON-topic packet on a zerohop channel has all three hop fields zeroed."""
+    name = "json-zerohop"
+    pre = health_stats()
+    pkt_id = 0xA6A6A6A6
+    body = json.dumps(
+        {
+            "id": pkt_id,
+            "from": 0xDEADBEEF,
+            "to": 0xFFFFFFFF,
+            "channel": 0,
+            "type": "text",
+            "payload": {"text": "hello-json"},
+            "sender": "!00000001",
+            "hop_start": 3,
+            "hops_away": 1,
+        }
+    ).encode()
+    topic = "msh/US/2/json/LongFast/!00000001"
+    pub.publish(topic, body)
+    time.sleep(SETTLE_SECONDS)
+
+    delivered = []
+    for m in sub.snapshot():
+        if m.topic != topic:
+            continue
+        try:
+            data = json.loads(m.payload)
+        except ValueError:
+            continue
+        if data.get("id") == pkt_id:
+            delivered.append(data)
+    if not delivered:
+        return Outcome(name, False, "packet was not delivered")
+    data = delivered[-1]
+    hops = (data.get("hop_limit"), data.get("hop_start"), data.get("hops_away"))
+    if hops != (0, 0, 0):
+        return Outcome(name, False, f"hop_limit/hop_start/hops_away = {hops}, expected all 0")
+    if data.get("payload") != {"text": "hello-json"}:
+        return Outcome(name, False, "payload did not survive intact")
+
+    post = health_stats()
+    if post.get("zerohop", 0) - pre.get("zerohop", 0) < 1:
+        return Outcome(name, False, "stats.zerohop did not increment")
     return Outcome(name)
 
 
 def case_hook_down_fails_open(pub: Publisher, sub: Subscriber) -> Outcome:
     """floodgate unreachable: the packet is delivered UNMODIFIED, not denied.
 
-    This is the case the deployment docs got backwards, so it is worth stating
+    This is the case that is easy to get backwards, so it is worth stating
     precisely. The ExHook is registered `failed_action: deny`, which reads like
     "if floodgate is down, refuse the publish". It does not behave that way for
     `message.publish`. When the gRPC server is unreachable the call *raises*
@@ -477,13 +550,13 @@ def case_hook_down_fails_open(pub: Publisher, sub: Subscriber) -> Outcome:
     before = exhook_failed_count()
     pkt_id = 0x0FF0DEAD
     body = build_envelope(
-        channel   = "LongFast",          # in zerohop_channels: would be zeroed if floodgate were up
-        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
-        payload   = b"hook is down",
-        packet_id = pkt_id,
-        from_node = 0x0BADCAFE,
-        hop_limit = 3,
-        hop_start = 3,
+        channel="LongFast",  # in zerohop_channels: would be zeroed if floodgate were up
+        portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload=b"hook is down",
+        packet_id=pkt_id,
+        from_node=0x0BADCAFE,
+        hop_limit=3,
+        hop_start=3,
     )
     pub.publish(topic_for("LongFast"), body)
     # The hook has to fail before EMQX moves on. A dead server refuses
@@ -492,14 +565,20 @@ def case_hook_down_fails_open(pub: Publisher, sub: Subscriber) -> Outcome:
 
     delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
     if not delivered:
-        return Outcome(name, False,
-                       "packet was NOT delivered — EMQX now fails closed; the "
-                       "blast radius of a floodgate outage has changed")
+        return Outcome(
+            name,
+            False,
+            "packet was NOT delivered — EMQX now fails closed; the "
+            "blast radius of a floodgate outage has changed",
+        )
     got = delivered[-1].payload
     if _parse_hop_limit(got) != 3 or _parse_hop_start(got) != 3:
-        return Outcome(name, False,
-                       f"hop fields were modified with floodgate down "
-                       f"(hop_limit={_parse_hop_limit(got)}, hop_start={_parse_hop_start(got)})")
+        return Outcome(
+            name,
+            False,
+            f"hop fields were modified with floodgate down "
+            f"(hop_limit={_parse_hop_limit(got)}, hop_start={_parse_hop_start(got)})",
+        )
     if got != body:
         return Outcome(name, False, "delivered payload differs from what was published")
 
@@ -507,9 +586,12 @@ def case_hook_down_fails_open(pub: Publisher, sub: Subscriber) -> Outcome:
     if after is None or before is None:
         return Outcome(name, False, "could not read exhook metrics from EMQX REST")
     if after <= before:
-        return Outcome(name, False,
-                       f"exhook metrics.failed did not increment ({before} -> {after}); "
-                       "the outage would be invisible to monitoring")
+        return Outcome(
+            name,
+            False,
+            f"exhook metrics.failed did not increment ({before} -> {after}); "
+            "the outage would be invisible to monitoring",
+        )
     return Outcome(name)
 
 
@@ -523,13 +605,13 @@ def case_recovery_after_hook_down(pub: Publisher, sub: Subscriber) -> Outcome:
     name = "recovery-after-hook-down"
     pkt_id = 0x0FF0BEEF
     body = build_envelope(
-        channel   = "LongFast",
-        portnum   = portnums_pb2.PortNum.TEXT_MESSAGE_APP,
-        payload   = b"hook is back",
-        packet_id = pkt_id,
-        from_node = 0x0BADCAFE,
-        hop_limit = 3,
-        hop_start = 3,
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload=b"hook is back",
+        packet_id=pkt_id,
+        from_node=0x0BADCAFE,
+        hop_limit=3,
+        hop_start=3,
     )
     pub.publish(topic_for("LongFast"), body)
     time.sleep(SETTLE_SECONDS)
@@ -539,13 +621,13 @@ def case_recovery_after_hook_down(pub: Publisher, sub: Subscriber) -> Outcome:
         return Outcome(name, False, "packet was not delivered after floodgate recovered")
     got = delivered[-1].payload
     if _parse_hop_limit(got) != 0 or _parse_hop_start(got) != 0:
-        return Outcome(name, False,
-                       f"zerohop did not resume (hop_limit={_parse_hop_limit(got)}, "
-                       f"hop_start={_parse_hop_start(got)}); hook did not auto-reconnect")
+        return Outcome(
+            name,
+            False,
+            f"zerohop did not resume (hop_limit={_parse_hop_limit(got)}, "
+            f"hop_start={_parse_hop_start(got)}); hook did not auto-reconnect",
+        )
     return Outcome(name)
-
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +679,7 @@ def _node_num() -> int:
     directed-message case just times out.
     """
     from meshtastic.tcp_interface import TCPInterface
+
     iface = TCPInterface(hostname=MESH_SIM_HOST, connectNow=True)
     try:
         time.sleep(2)
@@ -614,7 +697,7 @@ def case_firmware_accepts_zerohopped(pub_: Publisher, sub: Subscriber) -> Outcom
     otherwise the packet is from pre-2.3.0 firmware and is dropped outright,
     post-decode, before any module or phone sees it.
 
-    So a packet can be structurally perfect, pass all 227 unit tests, and still
+    So a packet can be structurally perfect, pass every unit test, and still
     be silently discarded on arrival. Only a real node can say otherwise.
 
     Deliberately one portnum: portnum handling is covered at the unit level,
@@ -625,21 +708,30 @@ def case_firmware_accepts_zerohopped(pub_: Publisher, sub: Subscriber) -> Outcom
     pkt_id = 0x7E570001
     payload = b"floodgate integration"
     body = build_envelope(
-        channel="LongFast", portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
-        payload=payload, packet_id=pkt_id, from_node=0x0BADF00D,
-        hop_limit=3, hop_start=3, channel_hash=LONGFAST_HASH,
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload=payload,
+        packet_id=pkt_id,
+        from_node=0x0BADF00D,
+        hop_limit=3,
+        hop_start=3,
+        channel_hash=LONGFAST_HASH,
     )
     got = _fw_receive(lambda: pub_.publish(FW_TOPIC, body), pkt_id)
     if not got:
-        return Outcome(name, False,
-                       "node never surfaced the packet - firmware dropped what "
-                       "floodgate produced (check hop_start/bitfield admission)")
+        return Outcome(
+            name,
+            False,
+            "node never surfaced the packet - firmware dropped what "
+            "floodgate produced (check hop_start/bitfield admission)",
+        )
     p = got[-1]
     # hop_limit/hop_start of 0 are proto3 defaults, so they are absent from the
     # dict entirely. Absent or explicitly 0 both mean zero-hopped.
     if p.get("hopLimit") not in (None, 0) or p.get("hopStart") not in (None, 0):
-        return Outcome(name, False,
-                       f"hops not zeroed (limit={p.get('hopLimit')} start={p.get('hopStart')})")
+        return Outcome(
+            name, False, f"hops not zeroed (limit={p.get('hopLimit')} start={p.get('hopStart')})"
+        )
     if p.get("decoded", {}).get("payload") != payload:
         return Outcome(name, False, "payload did not survive intact")
     return Outcome(name)
@@ -656,6 +748,8 @@ def case_firmware_traceroute_no_ghost_hops(pub_: Publisher, sub: Subscriber) -> 
 
     Publishing an ordinary 3-hop packet and letting floodgate do the zeroing is
     the point: revert to zeroing hop_limit only and this fails with 3 ghosts.
+    An unmodified 3/3 packet would show no ghosts either, so the case first
+    checks that the request really was zero-hopped on the bus.
     """
     name = "firmware-traceroute-no-ghost-hops"
     try:
@@ -665,13 +759,27 @@ def case_firmware_traceroute_no_ghost_hops(pub_: Publisher, sub: Subscriber) -> 
 
     pkt_id = 0x7E571000
     body = build_envelope(
-        channel="LongFast", portnum=portnums_pb2.PortNum.TRACEROUTE_APP,
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.TRACEROUTE_APP,
         payload=mesh_pb2.RouteDiscovery().SerializeToString(),
-        packet_id=pkt_id, from_node=0x0BADF00D, to_node=node,
-        hop_limit=3, hop_start=3, want_response=True, channel_hash=LONGFAST_HASH,
+        packet_id=pkt_id,
+        from_node=0x0BADF00D,
+        to_node=node,
+        hop_limit=3,
+        hop_start=3,
+        want_response=True,
+        channel_hash=LONGFAST_HASH,
     )
     pub_.publish(FW_TOPIC, body)
     time.sleep(10)
+
+    requests_seen = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not requests_seen:
+        return Outcome(name, False, "the traceroute request was not delivered")
+    request = requests_seen[-1].payload
+    hops = (_parse_hop_limit(request), _parse_hop_start(request))
+    if hops != (0, 0):
+        return Outcome(name, False, f"request not zero-hopped (limit, start = {hops})")
 
     routes = []
     for m in sub.snapshot():
@@ -694,9 +802,12 @@ def case_firmware_traceroute_no_ghost_hops(pub_: Publisher, sub: Subscriber) -> 
         return Outcome(name, False, f"no traceroute response from node {node:#x}")
     ghosts = [n for n in routes[-1] if n == BROADCAST]
     if ghosts:
-        return Outcome(name, False,
-                       f"{len(ghosts)} ghost hop(s) in {routes[-1]} - hop_start is "
-                       "no longer zeroed alongside hop_limit")
+        return Outcome(
+            name,
+            False,
+            f"{len(ghosts)} ghost hop(s) in {routes[-1]} - hop_start is "
+            "no longer zeroed alongside hop_limit",
+        )
     return Outcome(name)
 
 
@@ -707,15 +818,15 @@ CASE_SETS: dict[str, list] = {
         case_drop,
         case_passthru,
         case_noop,
-        case_custom_key_passthru,
+        case_custom_key_not_dropped,
+        case_json_zerohop,
     ],
     # Run by scripts/run-integration.sh with floodgate deliberately stopped.
     "hook-down": [case_hook_down_fails_open],
     # Run after floodgate is started again.
     "recovery": [case_recovery_after_hook_down],
     # Needs the mesh-sim service; run after it is configured and restarted.
-    "firmware": [case_firmware_accepts_zerohopped,
-                 case_firmware_traceroute_no_ghost_hops],
+    "firmware": [case_firmware_accepts_zerohopped, case_firmware_traceroute_no_ghost_hops],
 }
 
 
@@ -724,8 +835,11 @@ def run_all() -> int:
     try:
         cases = CASE_SETS[case_set]
     except KeyError:
-        print(f"unknown CASE_SET {case_set!r}; expected one of {sorted(CASE_SETS)}",
-              file=sys.stderr, flush=True)
+        print(
+            f"unknown CASE_SET {case_set!r}; expected one of {sorted(CASE_SETS)}",
+            file=sys.stderr,
+            flush=True,
+        )
         return 2
 
     sub = Subscriber(EMQX_HOST, EMQX_PORT)

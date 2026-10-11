@@ -16,19 +16,19 @@ PROTOBUF_PAYLOADS_DIR = PAYLOADS_DIR / "protobuf"
 # JSON extraction
 # ---------------------------------------------------------------------------
 
-class TestExtractPortnumJson:
 
+class TestExtractPortnumJson:
     # File → expected portnum enum name. Pinned to real fixtures so any
     # parser regression that misclassifies a real-world payload fails here.
     EXPECTED = {
-        "text_message.json":         "TEXT_MESSAGE_APP",
-        "position.json":             "POSITION_APP",
-        "nodeinfo.json":             "NODEINFO_APP",
-        "device_metrics.json":       "TELEMETRY_APP",
-        "environment_metrics.json":  "TELEMETRY_APP",
-        "neighborinfo.json":         "NEIGHBORINFO_APP",
-        "traceroute.json":           "TRACEROUTE_APP",
-        "range_test_app.json":       "RANGE_TEST_APP",
+        "text_message.json": "TEXT_MESSAGE_APP",
+        "position.json": "POSITION_APP",
+        "nodeinfo.json": "NODEINFO_APP",
+        "device_metrics.json": "TELEMETRY_APP",
+        "environment_metrics.json": "TELEMETRY_APP",
+        "neighborinfo.json": "NEIGHBORINFO_APP",
+        "traceroute.json": "TRACEROUTE_APP",
+        "range_test_app.json": "RANGE_TEST_APP",
     }
 
     @pytest.mark.parametrize("filename,expected", sorted(EXPECTED.items()))
@@ -57,10 +57,12 @@ class TestExtractPortnumJson:
 
     def test_nested_decoded_portnum_wins_over_type(self):
         # Wrapper packet form: `type` is "packet", real portnum nested deep.
-        payload = json.dumps({
-            "type": "packet",
-            "payload": {"decoded": {"portnum": "RANGE_TEST_APP"}},
-        }).encode()
+        payload = json.dumps(
+            {
+                "type": "packet",
+                "payload": {"decoded": {"portnum": "RANGE_TEST_APP"}},
+            }
+        ).encode()
         assert extract_portnum_json(payload) == "RANGE_TEST_APP"
 
     def test_payload_field_not_dict_falls_through(self):
@@ -83,10 +85,19 @@ class TestExtractPortnumJson:
         # The `type` strings MeshPacketSerializer::JsonSerialize emits,
         # identical in firmware 2.5.20, 2.6.11 and 2.7.11.
         from floodgate.portnum import _JSON_TYPE_TO_PORTNUM
+
         assert set(_JSON_TYPE_TO_PORTNUM) == {
-            "text", "telemetry", "nodeinfo", "position", "waypoint",
-            "neighborinfo", "traceroute", "detection", "paxcounter",
-            "gpios_changed", "gpios_read_reply",
+            "text",
+            "telemetry",
+            "nodeinfo",
+            "position",
+            "waypoint",
+            "neighborinfo",
+            "traceroute",
+            "detection",
+            "paxcounter",
+            "gpios_changed",
+            "gpios_read_reply",
         }
 
     def test_type_case_insensitive(self):
@@ -103,24 +114,32 @@ class TestExtractPortnumJson:
 # envelopes encrypted under the default key for these tests.
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def meshtastic_pb2():
     pytest.importorskip("meshtastic")
     from meshtastic import mesh_pb2, mqtt_pb2, portnums_pb2
+
     return mesh_pb2, mqtt_pb2, portnums_pb2
 
 
-def _build_encrypted_envelope(mesh_pb2, mqtt_pb2, portnum, payload_bytes,
-                              packet_id=0xAABBCCDD, from_node=0x12345678,
-                              channel_name="LongFast", hop_limit=0,
-                              hop_start=None):
+def _build_encrypted_envelope(
+    mesh_pb2,
+    mqtt_pb2,
+    portnum,
+    payload_bytes,
+    packet_id=0xAABBCCDD,
+    from_node=0x12345678,
+    channel_name="LongFast",
+    hop_limit=0,
+    hop_start=None,
+):
     """Construct a ServiceEnvelope whose inner MeshPacket has the named
     portnum encrypted under the default Meshtastic key."""
     data = mesh_pb2.Data()
     data.portnum = portnum
     data.payload = payload_bytes
-    ciphertext = decrypt(data.SerializeToString(),
-                         packet_id=packet_id, from_node=from_node)
+    ciphertext = decrypt(data.SerializeToString(), packet_id=packet_id, from_node=from_node)
 
     pkt = mesh_pb2.MeshPacket()
     pkt.id = packet_id
@@ -137,11 +156,11 @@ def _build_encrypted_envelope(mesh_pb2, mqtt_pb2, portnum, payload_bytes,
 
 
 class TestExtractPortnumProtobuf:
-
     def test_synthetic_range_test_packet(self, meshtastic_pb2):
         mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
         envelope = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2,
+            mesh_pb2,
+            mqtt_pb2,
             portnum=portnums_pb2.PortNum.RANGE_TEST_APP,
             payload_bytes=b"seq 7",
         )
@@ -150,7 +169,8 @@ class TestExtractPortnumProtobuf:
     def test_synthetic_text_message(self, meshtastic_pb2):
         mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
         envelope = _build_encrypted_envelope(
-            mesh_pb2, mqtt_pb2,
+            mesh_pb2,
+            mqtt_pb2,
             portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
             payload_bytes=b"hi",
         )

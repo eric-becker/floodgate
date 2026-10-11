@@ -13,6 +13,7 @@ from floodgate.zerohop import stats as packet_stats
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _start_test_server():
     """Start an HTTPServer on an OS-assigned port. Returns (server, url)."""
     server = HTTPServer(("127.0.0.1", 0), _HealthHandler)
@@ -35,8 +36,8 @@ def _get(url):
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestHealthEndpoint:
 
+class TestHealthEndpoint:
     def setup_method(self):
         # Reset both rolling and lifetime counters before each test
         with packet_stats._lock:
@@ -75,8 +76,7 @@ class TestHealthEndpoint:
             _, body = _get(f"{base}/health")
             data = json.loads(body)
             stats = data["stats"]
-            for key in ("zerohop", "passthru", "noop", "dropped",
-                        "skipped", "errors", "total"):
+            for key in ("zerohop", "passthru", "noop", "dropped", "skipped", "errors", "total"):
                 assert key in stats, f"missing key: {key}"
         finally:
             server.shutdown()
@@ -144,7 +144,6 @@ class TestHealthEndpoint:
 
 
 class TestStartHealthServer:
-
     def test_returns_daemon_thread(self):
         server_thread = start_health_server(0)
         # start_health_server binds to 0.0.0.0:port — just verify the thread

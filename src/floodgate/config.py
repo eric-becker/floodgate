@@ -17,10 +17,10 @@ INHERIT_ZEROHOP_CHANNELS = "zerohop_channels"
 
 # Removed in 0.3.0; keys present in user YAML trigger ConfigError.
 _REMOVED_KEYS = {
-    "channel_policy":    "Replaced by `zerohop_enabled` (bool) and `zerohop_channels` (list).",
+    "channel_policy": "Replaced by `zerohop_enabled` (bool) and `zerohop_channels` (list).",
     "channel_blacklist": "Renamed to `zerohop_channels`.",
     "channel_whitelist": "Removed (whitelist mode is gone — use `zerohop_enabled: false` "
-                         "or an empty `zerohop_channels` list).",
+    "or an empty `zerohop_channels` list).",
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -36,14 +36,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ShortSlow",
         "ShortTurbo",
     ],
-
     # Drop: deny entirely (EMQX does not deliver). Disabled by default.
-    "drop_enabled":  False,
+    "drop_enabled": False,
     "drop_channels": INHERIT_ZEROHOP_CHANNELS,
     "drop_portnums": [],
-
     # Transport / runtime
-    "grpc_port":        9000,
+    "grpc_port": 9000,
     # Size of the gRPC server's thread pool. EMQX opens `pool_size` concurrent
     # connections to the ExHook (its own default is 8); if this is smaller,
     # calls queue behind busy workers. A call slower than the broker's
@@ -52,15 +50,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # loses zero-hop protection rather than dropping packets.
     # Match or exceed the broker's exhook pool_size.
     "grpc_max_workers": 16,
-    "health_port":      8080,
-    "topic_filter":     "msh/#",
+    "health_port": 8080,
+    "topic_filter": "msh/#",
     "stats_interval_s": 60,
-    "log_level":        "INFO",
-    "log_format":       "text",   # "text" | "json"
-    "stats_log":        True,
+    "log_level": "INFO",
+    "log_format": "text",  # "text" | "json"
+    "stats_log": True,
 }
 
-_LOG_LEVELS  = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _LOG_FORMATS = ("text", "json")
 
 
@@ -90,14 +88,24 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
             # channel list -- a wrong mount path must be loud.
             raise ConfigError(f"Config file {path} not found")
         logger.info("Loading config from %s", path)
-        with open(path) as f:
-            user_config = yaml.safe_load(f)
+        try:
+            with open(path) as f:
+                user_config = yaml.safe_load(f)
+        except yaml.YAMLError as exc:
+            raise ConfigError(f"Config file {path} is not valid YAML:\n{exc}") from None
+        except OSError as exc:
+            raise ConfigError(f"Config file {path} could not be read: {exc}") from None
         if user_config is None:
             user_config = {}
         if not isinstance(user_config, dict):
             raise ConfigError(
                 f"Config file {path} must be a mapping of keys to values; "
                 f"got {type(user_config).__name__}"
+            )
+        bad_keys = [k for k in user_config if not isinstance(k, str)]
+        if bad_keys:
+            raise ConfigError(
+                f"Config file {path}: keys must be strings; got {', '.join(map(repr, bad_keys))}"
             )
         _reject_bad_keys(set(user_config), source=str(path))
         config.update(user_config)
@@ -115,7 +123,7 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
 
 
 def _validate_values(config: dict[str, Any], errors: list[str]) -> None:
-    """Type- and range-check every key, normalising where a spelling is
+    """Type- and range-check every key, normalizing where a spelling is
     unambiguous (log_level case, log_format case). Appends to `errors`.
 
     Booleans must be real YAML booleans: a quoted "false" is a truthy string,
@@ -138,9 +146,12 @@ def _validate_values(config: dict[str, Any], errors: list[str]) -> None:
 
     # FLOODGATE_LOG_FORMAT is convenient in container/k8s environments where
     # editing the mounted config.yaml is awkward.
-    env_fmt = os.environ.get("FLOODGATE_LOG_FORMAT")
-    fmt, label = (env_fmt, "FLOODGATE_LOG_FORMAT") if env_fmt is not None else (
-        config["log_format"], "`log_format`")
+    env_fmt = os.environ.get("FLOODGATE_LOG_FORMAT") or None  # empty means unset
+    fmt, label = (
+        (env_fmt, "FLOODGATE_LOG_FORMAT")
+        if env_fmt is not None
+        else (config["log_format"], "`log_format`")
+    )
     if isinstance(fmt, str) and fmt.lower() in _LOG_FORMATS:
         config["log_format"] = fmt.lower()
     else:
@@ -152,31 +163,39 @@ def _validate_values(config: dict[str, Any], errors: list[str]) -> None:
 
     try:
         config["_zerohop_channels_set"] = _validate_string_list(
-            config["zerohop_channels"], key="zerohop_channels",
+            config["zerohop_channels"],
+            key="zerohop_channels",
         )
         config["_drop_channels_set"] = _resolve_drop_channels(
-            config["drop_channels"], config["_zerohop_channels_set"],
+            config["drop_channels"],
+            config["_zerohop_channels_set"],
         )
     except ConfigError as exc:
         errors.append(str(exc))
     try:
         config["_drop_portnums_set"] = _validate_string_list(
-            config["drop_portnums"], key="drop_portnums",
+            config["drop_portnums"],
+            key="drop_portnums",
         )
         _check_portnum_names(config["_drop_portnums_set"], errors)
     except ConfigError as exc:
         errors.append(str(exc))
 
 
-def _check_int(config: dict[str, Any], key: str, errors: list[str],
-               low: int, high: int | None = None) -> None:
+def _check_int(
+    config: dict[str, Any], key: str, errors: list[str], low: int, high: int | None = None
+) -> None:
     """Append an error unless config[key] is an int in [low, high].
 
     bool is a subclass of int, so `grpc_port: true` is rejected explicitly.
     """
     value = config[key]
-    in_range = (isinstance(value, int) and not isinstance(value, bool)
-                and value >= low and (high is None or value <= high))
+    in_range = (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= low
+        and (high is None or value <= high)
+    )
     if not in_range:
         bound = f">= {low}" if high is None else f"between {low} and {high}"
         errors.append(f"`{key}` must be an integer {bound}; got {value!r}")
@@ -268,9 +287,7 @@ def _validate_string_list(value, key: str) -> set[str]:
         raise ConfigError(f"`{key}` must be a list of strings; got {type(value).__name__}")
     bad = [v for v in value if not isinstance(v, str)]
     if bad:
-        raise ConfigError(
-            f"`{key}` entries must be strings; got non-string entries: {bad!r}"
-        )
+        raise ConfigError(f"`{key}` entries must be strings; got non-string entries: {bad!r}")
     return set(value)
 
 

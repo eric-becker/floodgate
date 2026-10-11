@@ -1,14 +1,43 @@
 name: CI
 
+# One pipeline for pull requests, main and release tags. Nothing is published
+# unless every tier passes: the image job needs all test jobs, and the release
+# job needs the image job.
+#   pull_request -> all tiers + a multi-arch image build (not pushed)
+#   push to main -> all tiers + push ghcr.io/eric-becker/floodgate:latest
+#   push vX.Y.Z  -> all tiers + push :X.Y.Z and :X.Y (not :latest), then a GitHub release
+
 on:
   push:
     branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # ---------------------------------------------------------------------------
-  # Lint — fast style and import checks, no test dependencies needed
+  # Version consistency: pyproject, __version__, Chart appVersion, the static
+  # manifest's image tag, and (on a tag push) the tag itself must all agree.
+  # ---------------------------------------------------------------------------
+  version:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check version strings
+        env:
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: ./scripts/check_version.sh ${TAG:+"$TAG"}
+
+  # ---------------------------------------------------------------------------
+  # Lint and formatting, with the ruff version pinned in pyproject.toml
   # ---------------------------------------------------------------------------
   lint:
     name: Lint
@@ -20,15 +49,20 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install ruff
-        run: pip install ruff>=0.4
+      - name: Install ruff (the version pinned in pyproject.toml)
+        run: |
+          pip install "$(python -c 'import tomllib; print(next(d for d in tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["dev"] if d.startswith("ruff")))')"
 
-      - name: Check formatting and imports
-        run: ruff check src/ tests/
+      - name: Lint
+        run: ruff check .
+
+      - name: Check formatting
+        run: ruff format --check .
 
   # ---------------------------------------------------------------------------
-  # Unit tests — pure Python, no external services required
-  # Runs across the full supported Python version matrix.
+  # Unit tests across the supported Python versions. FLOODGATE_NO_SKIPS=1 turns
+  # any skipped test into a failure, so missing protobuf stubs can't quietly
+  # disable the protobuf tests.
   # ---------------------------------------------------------------------------
   test:
     runs-on: ubuntu-latest
@@ -44,20 +78,23 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      # Constrained to the image's pinned versions, so the tests exercise the
+      # same grpcio/protobuf/cryptography the published image ships.
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: pip install -e ".[dev]" -c requirements.txt -c requirements-build.txt
 
-      - name: Download Meshtastic protobufs
+      - name: Download Meshtastic protobufs (pinned)
         run: ./scripts/download_protobufs.sh
 
       - name: Generate Python protobuf stubs
         run: ./scripts/generate_protos.sh
 
       - name: Run unit tests with coverage
+        env:
+          FLOODGATE_NO_SKIPS: "1"
         run: |
           pytest tests/ -q \
             --ignore=tests/test_container_smoke.py \
-            --ignore=tests/integration \
             --cov=src/floodgate \
             --cov-report=term-missing \
             --cov-report=xml
@@ -71,8 +108,8 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------------
-  # Container smoke test — build the image and verify it starts correctly
-  # Catches Dockerfile bugs and runtime import errors that unit tests miss.
+  # Container smoke test: build the image and verify it starts and serves
+  # /health. Catches Dockerfile bugs and runtime import errors.
   # ---------------------------------------------------------------------------
   smoke:
     name: Container smoke test
@@ -93,9 +130,8 @@ jobs:
         run: pytest tests/test_container_smoke.py -m smoke -v
 
   # ---------------------------------------------------------------------------
-  # Integration test — full Docker Compose stack: emqx + floodgate + meshtasticd
-  # End-to-end validation of drop / zerohop / passthru / noop / custom-key /
-  # meshtasticd round-trip via subscriber capture and /health stats.
+  # Integration: EMQX + floodgate + a real meshtasticd node, in Docker Compose.
+  # Passes: default cases, hook-down (fail-open), recovery, firmware.
   # ---------------------------------------------------------------------------
   integration:
     name: Integration test (compose stack)
@@ -118,8 +154,8 @@ jobs:
         run: docker compose -f docker-compose.test.yaml down -v --remove-orphans || true
 
   # ---------------------------------------------------------------------------
-  # Manifest validation — verify static k8s/ YAML and the rendered Helm chart
-  # are valid against the k8s schema
+  # Manifests: schema-validate the static k8s/ YAML and the rendered chart, and
+  # check the rendered chart with floodgate's own config loader.
   # ---------------------------------------------------------------------------
   manifests:
     name: Validate k8s manifests
@@ -127,6 +163,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install floodgate and generate stubs
+        run: |
+          pip install -e ".[dev]" -c requirements.txt -c requirements-build.txt
+          ./scripts/download_protobufs.sh
+          ./scripts/generate_protos.sh
 
       - name: Install kubeconform
         run: |
@@ -139,23 +185,97 @@ jobs:
           version: v3.16.2
 
       - name: Validate static k8s manifests
-        run: |
-          kubeconform -strict -summary k8s/*.yaml
+        run: kubeconform -strict -summary k8s/*.yaml
 
       - name: Lint Helm chart
-        run: |
-          helm lint charts/floodgate
+        run: helm lint charts/floodgate
 
       - name: Validate rendered chart (defaults)
+        env:
+          PYTHONPATH: generated
         run: |
-          helm template floodgate charts/floodgate \
-            | kubeconform -strict -summary
+          helm template floodgate charts/floodgate > rendered.yaml
+          kubeconform -strict -summary rendered.yaml
+          python scripts/check_chart.py < rendered.yaml
 
       - name: Validate rendered chart (PDB enabled, drop enabled, json logs)
+        env:
+          PYTHONPATH: generated
         run: |
           helm template floodgate charts/floodgate \
+            --set replicaCount=2 \
             --set podDisruptionBudget.enabled=true \
             --set config.drop_enabled=true \
             --set 'config.drop_portnums={RANGE_TEST_APP}' \
-            --set config.log_format=json \
-            | kubeconform -strict -summary
+            --set config.log_format=json > rendered.yaml
+          kubeconform -strict -summary rendered.yaml
+          python scripts/check_chart.py < rendered.yaml
+
+  # ---------------------------------------------------------------------------
+  # Image: multi-arch build after every tier passes. Pushed only for main
+  # (:latest) and release tags (:X.Y.Z, :X.Y); pull requests build only.
+  # ---------------------------------------------------------------------------
+  image:
+    name: Image
+    runs-on: ubuntu-latest
+    needs: [version, test, smoke, integration, manifests]
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/eric-becker/floodgate
+          # Without latest=false, metadata-action also tags semver builds as
+          # :latest, so a tag on an older commit would move :latest backwards.
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ---------------------------------------------------------------------------
+  # Release: GitHub release for a version tag, only after its image is pushed.
+  # ---------------------------------------------------------------------------
+  release:
+    name: GitHub release
+    runs-on: ubuntu-latest
+    needs: image
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" 2>/dev/null || \
+          gh release create "$TAG" --title "$TAG" --generate-notes --verify-tag

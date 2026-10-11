@@ -10,7 +10,7 @@ services:
     container_name: floodgate-test-emqx
     networks: [floodgate-test-net]
     ports:
-      - "18083:18083"
+      - "127.0.0.1:18083:18083"
     environment:
       EMQX_NAME: "emqx-test"
       EMQX_DASHBOARD__DEFAULT_PASSWORD: "public"
@@ -29,7 +29,7 @@ services:
     container_name: floodgate-test-floodgate
     networks: [floodgate-test-net]
     ports:
-      - "18089:8080"
+      - "127.0.0.1:18089:8080"
     environment:
       FLOODGATE_CONFIG: /app/config.yaml
     volumes:

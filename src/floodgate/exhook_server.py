@@ -11,7 +11,7 @@ from .zerohop import stats as packet_stats
 
 logger = logging.getLogger(__name__)
 
-_exhook_pb2      = None
+_exhook_pb2 = None
 _exhook_pb2_grpc = None
 
 
@@ -19,7 +19,8 @@ def _load_exhook_protos():
     global _exhook_pb2, _exhook_pb2_grpc
     if _exhook_pb2 is None:
         from generated import exhook_pb2, exhook_pb2_grpc
-        _exhook_pb2      = exhook_pb2
+
+        _exhook_pb2 = exhook_pb2
         _exhook_pb2_grpc = exhook_pb2_grpc
 
 
@@ -27,8 +28,8 @@ def _load_exhook_protos():
 # gRPC servicer
 # ---------------------------------------------------------------------------
 
-class HookProviderServicer:
 
+class HookProviderServicer:
     def __init__(self, config: dict):
         self.config = config
         _load_exhook_protos()
@@ -53,7 +54,8 @@ class HookProviderServicer:
 
     def OnMessagePublish(self, request, context):
         msg = request.message
-        logger.debug("OnMessagePublish: topic=%s bytes=%d", msg.topic, len(msg.payload))
+        # %r: the topic is publisher-controlled and must not break the log line.
+        logger.debug("OnMessagePublish: topic=%r bytes=%d", msg.topic, len(msg.payload))
         result = process_message(msg.topic, msg.payload, self.config)
         logger.debug("OnMessagePublish: action=%s", result.action)
 
@@ -138,8 +140,8 @@ class HookProviderServicer:
 # Periodic stats reporter
 # ---------------------------------------------------------------------------
 
-def _stats_reporter(interval_s: int, stop_event: threading.Event,
-                    stats_log: bool = True):
+
+def _stats_reporter(interval_s: int, stop_event: threading.Event, stats_log: bool = True):
     """Log rolling stats every interval_s seconds (resets counters each cycle)."""
     while not stop_event.wait(timeout=interval_s):
         snap = packet_stats.reset()
@@ -149,15 +151,15 @@ def _stats_reporter(interval_s: int, stop_event: threading.Event,
             logger.info(
                 "stats",
                 extra={
-                    "event":      "stats",
+                    "event": "stats",
                     "interval_s": interval_s,
-                    "zerohop":    snap["zerohop"],
-                    "passthru":   snap["passthru"],
-                    "noop":       snap["noop"],
-                    "dropped":    snap["dropped"],
-                    "skipped":    snap["skipped"],
-                    "errors":     snap["errors"],
-                    "total":      snap["total"],
+                    "zerohop": snap["zerohop"],
+                    "passthru": snap["passthru"],
+                    "noop": snap["noop"],
+                    "dropped": snap["dropped"],
+                    "skipped": snap["skipped"],
+                    "errors": snap["errors"],
+                    "total": snap["total"],
                 },
             )
         else:
@@ -168,8 +170,9 @@ def _stats_reporter(interval_s: int, stop_event: threading.Event,
 # Server bootstrap
 # ---------------------------------------------------------------------------
 
+
 def _log_startup_policy(config: dict):
-    interval     = config.get("stats_interval_s", 60)
+    interval = config.get("stats_interval_s", 60)
     topic_filter = config.get("topic_filter", "msh/#")
     logger.info("Topic filter: %s", topic_filter)
 
@@ -190,14 +193,13 @@ def _log_startup_policy(config: dict):
     if config.get("drop_enabled", False):
         portnums = config.get("drop_portnums", []) or []
         if not portnums:
-            logger.warning(
-                "Drop ENABLED but `drop_portnums` is empty — drop is a no-op"
-            )
+            logger.warning("Drop ENABLED but `drop_portnums` is empty — drop is a no-op")
         else:
             scope = _format_drop_channel_scope(config)
             logger.info(
                 "Drop ENABLED — dropping portnums [%s] on %s",
-                ", ".join(portnums), scope,
+                ", ".join(portnums),
+                scope,
             )
     else:
         logger.info("Drop DISABLED")
@@ -220,24 +222,28 @@ def serve(config: dict):
     """Start the ExHook gRPC server and block until terminated."""
     _load_exhook_protos()
 
-    port           = config.get("grpc_port", 9000)
-    health_port    = config.get("health_port", 8080)
+    port = config.get("grpc_port", 9000)
+    health_port = config.get("health_port", 8080)
     stats_interval = config.get("stats_interval_s", 60)
-    max_workers    = config.get("grpc_max_workers", 16)
+    max_workers = config.get("grpc_max_workers", 16)
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))
-    _exhook_pb2_grpc.add_HookProviderServicer_to_server(
-        HookProviderServicer(config), server
-    )
+    _exhook_pb2_grpc.add_HookProviderServicer_to_server(HookProviderServicer(config), server)
     try:
         server.add_insecure_port(f"[::]:{port}")
         server.start()
     except Exception as exc:
-        logger.error("Failed to start gRPC server on port %d: %s(%s)",
-                     port, type(exc).__name__, exc, exc_info=True)
+        logger.error(
+            "Failed to start gRPC server on port %d: %s(%s)",
+            port,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
         raise
 
     from .health import start_health_server
+
     start_health_server(health_port)
 
     logger.info("ExHook gRPC server listening on port %d  (max_workers=%d)", port, max_workers)
@@ -245,7 +251,7 @@ def serve(config: dict):
     _log_startup_policy(config)
 
     stats_log = config.get("stats_log", True)
-    stop_event   = threading.Event()
+    stop_event = threading.Event()
     stats_thread = threading.Thread(
         target=_stats_reporter,
         args=(stats_interval, stop_event, stats_log),
@@ -257,8 +263,9 @@ def serve(config: dict):
     try:
         server.wait_for_termination()
     except Exception as exc:
-        logger.error("gRPC server terminated unexpectedly: %s(%s)",
-                     type(exc).__name__, exc, exc_info=True)
+        logger.error(
+            "gRPC server terminated unexpectedly: %s(%s)", type(exc).__name__, exc, exc_info=True
+        )
         raise
     finally:
         stop_event.set()
