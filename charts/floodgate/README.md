@@ -1,6 +1,6 @@
 # floodgate
 
-Helm chart for [floodgate](https://github.com/eric-becker/floodgate), an MQTT anti-flood service for Meshtastic. floodgate plugs into EMQX via the ExHook gRPC interface and either zeroes the `hop_limit` and `hop_start` of in-flight `MeshPacket`s on public channels or drops them outright by portnum.
+Helm chart for [floodgate](https://github.com/eric-becker/floodgate), an MQTT anti-flood service for Meshtastic. floodgate plugs into EMQX via the ExHook gRPC interface and either zero-hops in-flight `MeshPacket`s on public channels (`hop_limit` 0, `hop_start` = hops already travelled) or drops them outright by portnum.
 
 ## Install
 
@@ -41,7 +41,7 @@ The full default set lives in [values.yaml](values.yaml). Highlights:
 | `image.tag` | `""` (Chart `appVersion`) | Override to pin |
 | `replicaCount` | `1` | Replicas share one ExHook URL; kube-proxy spreads EMQX's `pool_size` long-lived gRPC connections across pods at connect time, not per call |
 | `config.zerohop_enabled` | `true` | Master switch for the zero-hop modifier |
-| `config.zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` and `hop_start` zeroed |
+| `config.zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` set to 0 (and `hop_start` to the hops travelled) |
 | `config.drop_enabled` | `false` | Master switch for the drop filter |
 | `config.drop_channels` | `"zerohop_channels"` | Inherits `zerohop_channels`, or a list. For **all channels** set `drop_channels: []` in a values file: Helm deletes a key set to `null` (floodgate then keeps the default scope), and `--set config.drop_channels={}` renders `[""]`, which matches nothing |
 | `config.drop_portnums` | `[]` | Exact `PortNum` names, e.g. `[RANGE_TEST_APP]`; unknown names are rejected at startup |

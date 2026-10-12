@@ -274,11 +274,11 @@ class TestForwardCompatibility:
 class TestTracerouteFidelity:
     """Regression guard for #46 at the payload level, not the field level.
 
-    The ghost-hop bug was a *rendering* fault: clients derive the hop count from
-    hop_start, so zeroing hop_limit alone inflated the count and produced
-    phantom 'Meshtastic ffff (ffff)' entries. Asserting hop_start == 0 catches
-    the fix; asserting the route array survives catches the overcorrection —
-    zeroing something that carries the actual traceroute result.
+    The ghost-hop bug was a *rendering* fault: firmware pads a traceroute with
+    'Meshtastic ffff (ffff)' once for every hop that hop_start - hop_limit claims
+    but the route didn't record. Zeroing hop_limit alone made that claim the
+    full hop limit. The invariant is therefore hops claimed == hops travelled,
+    and the route array must survive untouched.
     """
 
     def test_route_array_survives_and_hops_are_zeroed(self, meshtastic_pb2):  # noqa: F811
@@ -315,3 +315,29 @@ class TestTracerouteFidelity:
         assert list(recovered_route.route) == [0x11111111, 0x22222222, 0x33333333]
         assert after.packet.hop_limit == 0
         assert after.packet.hop_start == 0
+
+    def test_hops_claimed_match_the_recorded_route(self, meshtastic_pb2):  # noqa: F811
+        """A realistic traceroute: three relays recorded, three hops travelled
+        (hop_start 7, hop_limit 4). After zero-hop the claim must still be 3,
+        so firmware has nothing to pad."""
+        mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
+
+        route = mesh_pb2.RouteDiscovery()
+        route.route.extend([0x11111111, 0x22222222, 0x33333333])
+        envelope_bytes = _build_encrypted_envelope(
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TRACEROUTE_APP,
+            payload_bytes=route.SerializeToString(),
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            hop_limit=4,
+            hop_start=7,
+        )
+        modified, old_hop, _meta = zerohop_protobuf(envelope_bytes)
+        assert old_hop == 4
+        after = mqtt_pb2.ServiceEnvelope()
+        after.ParseFromString(modified)
+
+        assert after.packet.hop_limit == 0
+        assert after.packet.hop_start - after.packet.hop_limit == len(route.route)

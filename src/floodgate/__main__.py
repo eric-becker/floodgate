@@ -13,8 +13,8 @@ def main():
         prog="floodgate",
         description=(
             "Zero-hop MQTT anti-flood service for Meshtastic/EMQX.\n"
-            "Zeros MeshPacket.hop_limit and hop_start in-flight via EMQX ExHook "
-            "before delivery to subscribers."
+            "Sets MeshPacket.hop_limit to 0 (and hop_start to the hops travelled)\n"
+            "in-flight via EMQX ExHook, before delivery to subscribers."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
