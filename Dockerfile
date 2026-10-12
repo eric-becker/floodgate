@@ -8,9 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-build.txt ./
-# grpcio-tools (requirements-build.txt) generates the stubs; it is build-only
-# and never reaches the runtime stage.
-RUN pip install --no-cache-dir -r requirements.txt -r requirements-build.txt
+# Every package, transitive ones included, is pinned with hashes (compiled from
+# requirements*.in by pip-compile). grpcio-tools (requirements-build.txt)
+# generates the stubs; it is build-only and never reaches the runtime stage.
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt -r requirements-build.txt
 
 # download + generate protobufs (at the commit pinned in the script)
 COPY scripts/download_protobufs.sh scripts/
@@ -26,7 +27,7 @@ FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 COPY --from=builder /build/generated/ /app/generated/
 COPY src/ /app/src/

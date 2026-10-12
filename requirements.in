@@ -1,0 +1,10 @@
+# Direct runtime dependencies of the container image. requirements.txt is
+# compiled from this file with exact versions and hashes for every package,
+# transitive ones included, so an image build is reproducible and verified:
+#   pip-compile --generate-hashes --strip-extras requirements.in
+# (run under the image's Python, 3.13). Dependabot keeps both files in step.
+grpcio==1.84.0
+protobuf==7.36.2
+pyyaml==6.0.3
+python-json-logger==4.2.0
+cryptography==50.0.2

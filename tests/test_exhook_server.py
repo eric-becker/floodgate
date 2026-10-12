@@ -173,3 +173,74 @@ class TestStatsReporter:
         stop.set()
         thread.join(timeout=2)
         assert not thread.is_alive()
+
+
+class TestStart:
+    """start() wires the real gRPC server, servicer and health server together.
+
+    Everything else in this file calls the servicer directly; this goes over
+    the network, the way EMQX does.
+    """
+
+    def test_serves_exhook_and_health_then_stops(self, tmp_path, caplog):
+        import urllib.request
+
+        import grpc
+        import yaml
+
+        from floodgate.config import load_config
+        from floodgate.exhook_server import start
+
+        exhook_pb2_grpc = pytest.importorskip("generated.exhook_pb2_grpc")
+        cfg_file = tmp_path / "config.yaml"
+        cfg_file.write_text(yaml.dump({"zerohop_channels": ["LongFast"]}))
+        config = load_config(str(cfg_file))
+        config["grpc_port"] = 0  # ephemeral; load_config would reject 0
+        config["health_port"] = 0
+
+        with caplog.at_level("INFO", logger="floodgate"):
+            running = start(config)
+        try:
+            assert running.grpc_port > 0 and running.health_port > 0
+            with grpc.insecure_channel(f"127.0.0.1:{running.grpc_port}") as channel:
+                stub = exhook_pb2_grpc.HookProviderStub(channel)
+                loaded = stub.OnProviderLoaded(
+                    exhook_pb2.ProviderLoadedRequest(
+                        broker=exhook_pb2.BrokerInfo(version="6.2.0", sysdescr="EMQX")
+                    ),
+                    timeout=5,
+                )
+                assert [h.name for h in loaded.hooks] == ["message.publish"]
+                payload = json.dumps({"id": 1, "hop_start": 3, "hops_away": 0}).encode()
+                resp = stub.OnMessagePublish(_publish_request(payload), timeout=5)
+                assert resp.type == exhook_pb2.ValuedResponse.STOP_AND_RETURN
+                assert json.loads(resp.message.payload)["hop_limit"] == 0
+
+            url = f"http://127.0.0.1:{running.health_port}/health"
+            body = json.loads(urllib.request.urlopen(url, timeout=5).read())
+            assert body["status"] == "ok"
+            assert body["stats"]["zerohop"] >= 1
+        finally:
+            running.stop()
+
+        messages = [r.getMessage() for r in caplog.records]
+        assert any(f"listening on port {running.grpc_port}" in m for m in messages)
+        assert any("Zerohop ENABLED" in m and "LongFast" in m for m in messages)
+        assert any("Drop DISABLED" in m for m in messages)
+        assert any("Health check listening" in m for m in messages)
+
+    def test_stop_releases_both_ports(self, tmp_path):
+        import socket
+
+        from floodgate.config import load_config
+        from floodgate.exhook_server import start
+
+        config = load_config(None)
+        config["grpc_port"] = 0
+        config["health_port"] = 0
+        running = start(config)
+        running.stop()
+        for port in (running.grpc_port, running.health_port):
+            with socket.socket() as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("0.0.0.0", port))  # raises if still held

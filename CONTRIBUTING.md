@@ -115,7 +115,7 @@ Releases use semantic versioning. Before 1.0, a **minor** release may change the
 
 ### Dependencies
 
-`requirements.txt` (the image's runtime dependencies), `requirements-build.txt` (`grpcio-tools`, builder stage only) and the Dockerfile's base image are pinned exactly. CI installs with both requirements files as constraints, so the tests run against the versions the image ships. Dependabot proposes monthly bumps for pip, Docker and GitHub Actions, and CI decides. `pyproject.toml` keeps looser ranges for source installs, and pins ruff, which CI reads from there.
+`requirements.txt` (the image's runtime dependencies) and `requirements-build.txt` (`grpcio-tools`, builder stage only) pin every package, transitive ones included, with hashes; the image installs them with `--require-hashes`. They are compiled from `requirements.in` / `requirements-build.in` with the `pip-compile` commands in those files, under Python 3.13 (the image's). To change a dependency, edit the `.in` file and recompile; never hand-edit the `.txt`. CI installs the same hashed set before floodgate's dev tools, so the tests run against what the image ships. The Dockerfile's base image is pinned by digest. Dependabot proposes monthly bumps for pip, Docker and GitHub Actions, and CI decides. `pyproject.toml` keeps looser ranges for source installs, and pins ruff, which CI reads from there.
 
 ## Protobuf compatibility
 

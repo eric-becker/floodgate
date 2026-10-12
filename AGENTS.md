@@ -84,7 +84,7 @@ After startup, register the ExHook in EMQX (README, "Registering the ExHook").
 - Commits: conventional format — `feat:`, `fix:`, `docs:`, `test:`, `chore:`
 - PRs: squash-merge to main; delete branch after merge
 - Releases: bump the four version strings `scripts/check_version.sh` checks, merge, then `git tag vX.Y.Z && git push origin vX.Y.Z`. `ci.yml` runs every job on the tag and only then pushes the image and creates the GitHub release
-- Pinned on purpose: the protobufs commit (`PROTOBUFS_REF` in `scripts/download_protobufs.sh`), `requirements.txt` and `requirements-build.txt` (CI installs with them as constraints, so tests use the image's versions), the Dockerfile base image digest and ruff (`pyproject.toml`; CI reads it from there). Bump them in a PR; never unpin
+- Pinned on purpose: the protobufs commit (`PROTOBUFS_REF` in `scripts/download_protobufs.sh`), `requirements*.txt` (compiled with hashes from `requirements*.in` by pip-compile -- edit the `.in`, never the `.txt`; CI installs the hashed set first, so tests use the image's versions), the Dockerfile base image digest and ruff (`pyproject.toml`; CI reads it from there). Bump them in a PR; never unpin
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for full release workflow details
 
 ## Key Config Options
