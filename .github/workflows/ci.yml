@@ -78,10 +78,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # Constrained to the image's pinned versions, so the tests exercise the
-      # same grpcio/protobuf/cryptography the published image ships.
+      # The image's exact, hash-verified dependency set first; floodgate and its
+      # dev tools on top (pip keeps versions that already satisfy them). So the
+      # tests run against what the published image ships.
       - name: Install dependencies
-        run: pip install -e ".[dev]" -c requirements.txt -c requirements-build.txt
+        run: |
+          pip install --require-hashes -r requirements.txt -r requirements-build.txt
+          pip install -e ".[dev]"
 
       - name: Download Meshtastic protobufs (pinned)
         run: ./scripts/download_protobufs.sh
@@ -170,7 +173,8 @@ jobs:
 
       - name: Install floodgate and generate stubs
         run: |
-          pip install -e ".[dev]" -c requirements.txt -c requirements-build.txt
+          pip install --require-hashes -r requirements.txt -r requirements-build.txt
+          pip install -e ".[dev]"
           ./scripts/download_protobufs.sh
           ./scripts/generate_protos.sh
 

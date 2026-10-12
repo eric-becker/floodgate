@@ -32,14 +32,18 @@ class _HealthHandler(BaseHTTPRequestHandler):
         pass  # suppress per-request access logs
 
 
-def start_health_server(port: int) -> threading.Thread:
-    """Start the HTTP health server in a daemon thread. Returns immediately."""
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
+def start_health_server(port: int, host: str = "0.0.0.0") -> HTTPServer:
+    """Start the HTTP health server in a daemon thread and return the server.
+
+    Returns immediately. Call `shutdown()` then `server_close()` on the result
+    to stop it. Port 0 binds an ephemeral port; read it from `server_address`.
+    """
+    server = HTTPServer((host, port), _HealthHandler)
     thread = threading.Thread(
         target=server.serve_forever,
         daemon=True,
         name="health-server",
     )
     thread.start()
-    logger.info("Health check listening on port %d  GET /health", port)
-    return thread
+    logger.info("Health check listening on port %d  GET /health", server.server_address[1])
+    return server

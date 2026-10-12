@@ -144,9 +144,15 @@ class TestHealthEndpoint:
 
 
 class TestStartHealthServer:
-    def test_returns_daemon_thread(self):
-        server_thread = start_health_server(0)
-        # start_health_server binds to 0.0.0.0:port — just verify the thread
-        assert isinstance(server_thread, threading.Thread)
-        assert server_thread.daemon is True
-        assert server_thread.is_alive()
+    def test_serves_and_shuts_down(self):
+        server = start_health_server(0, host="127.0.0.1")
+        try:
+            port = server.server_address[1]
+            status, body = _get(f"http://127.0.0.1:{port}/health")
+            assert status == 200
+            assert json.loads(body)["status"] == "ok"
+            threads = [t for t in threading.enumerate() if t.name == "health-server"]
+            assert threads and all(t.daemon for t in threads)
+        finally:
+            server.shutdown()
+            server.server_close()

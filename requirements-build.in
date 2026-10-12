@@ -1,0 +1,5 @@
+# Build-only: generates the protobuf stubs in the image's builder stage and in
+# CI. Constrained to requirements.txt so grpcio/protobuf match the runtime.
+#   pip-compile --generate-hashes --strip-extras --allow-unsafe requirements-build.in
+grpcio-tools==1.84.0
+-c requirements.txt

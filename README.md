@@ -106,7 +106,7 @@ curl -s "$EMQX/api/v5/exhooks/floodgate" -H "Authorization: Bearer $TOKEN" \
   | jq '{enable, failed: .metrics.failed, nodes: [.node_status[].status]}'
 ```
 
-Expect `enable: true` and every node `connected`. EMQX 6 reports status per node under `node_status`; there is no top-level `status` field, so `jq .status` prints `null` even when the hook is working. floodgate logs `ExHook connected: EMQX <version>` when EMQX loads it — that line, not the container starting, is the proof it is intercepting.
+Expect `enable: true` and every node `connected`. EMQX 6 reports status per node under `node_status`; there is no top-level `status` field, so `jq .status` prints `null` even when the hook is working. floodgate logs `ExHook connected: EMQX <version>` when EMQX loads it at registration (or when EMQX itself restarts). It does **not** log it again when only floodgate restarts — see [Verifying after a restart or upgrade](#verifying-after-a-restart-or-upgrade).
 
 ### Docker Compose (floodgate + EMQX together)
 
@@ -272,8 +272,8 @@ nothing rolls the pod on a ConfigMap edit, so a bad config sits unnoticed until 
 restart takes floodgate down. In Compose there is a second trap: if EMQX `depends_on` floodgate
 being healthy (as recommended under [Startup ordering](#startup-ordering-and-upgrades)) and EMQX is
 created or recreated in the same `docker compose up`, EMQX never starts and the whole broker is
-down. Restart floodgate on its own first, and wait for `ExHook connected: EMQX ...` in its logs
-before walking away — that line means EMQX is calling floodgate, not just that the process started.
+down. Restart floodgate on its own first, and [verify EMQX is calling it](#verifying-after-a-restart-or-upgrade)
+before walking away.
 
 CI regression-tests the stopped-server path (`hook-down-fails-open`, `recovery-after-hook-down`),
 so if a future EMQX release starts failing closed there, CI will say so. The hung-server path was
@@ -309,7 +309,18 @@ The configured value is logged at startup:
 
 In Docker Compose, EMQX should `depends_on` floodgate (not the other way around). floodgate is a gRPC server — it starts first, listens on port 9000, and waits. EMQX connects to it after boot. See [docker-compose.yaml](docker-compose.yaml) for the reference configuration, and the config-error trap above.
 
-In Kubernetes the chart's rolling update (`maxUnavailable: 0, maxSurge: 1`) starts the new pod and waits for it to be Ready before terminating the old one, and EMQX reconnects through the Service. Readiness means floodgate's HTTP server is up, not that EMQX has connected: `/health` reports `ok` either way. Whether calls in flight while EMQX moves its connections are delivered unmodified has not been measured, so keep `auto_reconnect` short and treat an upgrade as a possible brief protection gap.
+In Kubernetes the chart's rolling update (`maxUnavailable: 0, maxSurge: 1`) starts the new pod and waits for it to be Ready before terminating the old one, and EMQX reconnects through the Service. Readiness means floodgate's HTTP server is up, not that EMQX has connected: `/health` reports `ok` either way.
+
+**Measured protection gap on a restart** (Docker Compose, EMQX 6.2.0, `docker compose up -d --force-recreate floodgate` while publishing 10 packets/s): 5 of 896 packets were delivered unmodified, all within 0.4 s, and none were lost. EMQX's gRPC channel reconnects to the new container within a fraction of a second — it does not wait for `auto_reconnect` — so an upgrade costs well under a second of protection. The Kubernetes rolling update has not been measured the same way.
+
+### Verifying after a restart or upgrade
+
+When only floodgate restarts, EMQX's gRPC channel reconnects transparently and EMQX does **not** call `OnProviderLoaded` again. So floodgate does not log `ExHook connected` again, even though it is working. Verify instead with either:
+
+- EMQX's hook counters: `metrics.succeed` rising and `metrics.failed` flat, and every node `connected` (the command under [Registering the ExHook](#registering-the-exhook)), or
+- floodgate's own per-message log lines (`[ZEROHOP]`, `[PASSTHRU]` …) or `/health` counters rising.
+
+A consequence: `topic_filter` is sent to EMQX only in `OnProviderLoaded`. Changing it and restarting floodgate leaves EMQX on the old filter until the hook is re-registered (or disabled and re-enabled) or EMQX restarts.
 
 ## Security
 

@@ -3,6 +3,8 @@
 import logging
 import threading
 from concurrent import futures
+from dataclasses import dataclass
+from http.server import HTTPServer
 
 import grpc
 
@@ -218,8 +220,28 @@ def _format_drop_channel_scope(config: dict) -> str:
     return f"channels [{', '.join(sorted(drop_set))}]"
 
 
-def serve(config: dict):
-    """Start the ExHook gRPC server and block until terminated."""
+@dataclass
+class RunningServer:
+    """Handles to a started floodgate: the gRPC server, the health server and
+    the stats reporter's stop flag. Ports are the bound ones, so a config port
+    of 0 (tests) reports the ephemeral port actually in use."""
+
+    grpc_server: grpc.Server
+    grpc_port: int
+    health_server: HTTPServer
+    health_port: int
+    stop_event: threading.Event
+
+    def stop(self, grace: float | None = None) -> None:
+        self.stop_event.set()
+        self.grpc_server.stop(grace).wait()
+        self.health_server.shutdown()
+        self.health_server.server_close()
+
+
+def start(config: dict) -> RunningServer:
+    """Start the ExHook gRPC server, health server and stats reporter; return
+    immediately with handles to them."""
     _load_exhook_protos()
 
     port = config.get("grpc_port", 9000)
@@ -230,7 +252,7 @@ def serve(config: dict):
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))
     _exhook_pb2_grpc.add_HookProviderServicer_to_server(HookProviderServicer(config), server)
     try:
-        server.add_insecure_port(f"[::]:{port}")
+        bound_port = server.add_insecure_port(f"[::]:{port}")
         server.start()
     except Exception as exc:
         logger.error(
@@ -244,28 +266,40 @@ def serve(config: dict):
 
     from .health import start_health_server
 
-    start_health_server(health_port)
+    health_server = start_health_server(health_port)
 
-    logger.info("ExHook gRPC server listening on port %d  (max_workers=%d)", port, max_workers)
+    logger.info(
+        "ExHook gRPC server listening on port %d  (max_workers=%d)", bound_port, max_workers
+    )
     logger.info("Waiting for EMQX to connect and register ExHook...")
     _log_startup_policy(config)
 
-    stats_log = config.get("stats_log", True)
     stop_event = threading.Event()
-    stats_thread = threading.Thread(
+    threading.Thread(
         target=_stats_reporter,
-        args=(stats_interval, stop_event, stats_log),
+        args=(stats_interval, stop_event, config.get("stats_log", True)),
         daemon=True,
         name="stats-reporter",
-    )
-    stats_thread.start()
+    ).start()
 
+    return RunningServer(
+        grpc_server=server,
+        grpc_port=bound_port,
+        health_server=health_server,
+        health_port=health_server.server_address[1],
+        stop_event=stop_event,
+    )
+
+
+def serve(config: dict):
+    """Start floodgate and block until the gRPC server terminates."""
+    running = start(config)
     try:
-        server.wait_for_termination()
+        running.grpc_server.wait_for_termination()
     except Exception as exc:
         logger.error(
             "gRPC server terminated unexpectedly: %s(%s)", type(exc).__name__, exc, exc_info=True
         )
         raise
     finally:
-        stop_event.set()
+        running.stop_event.set()
