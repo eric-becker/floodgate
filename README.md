@@ -20,7 +20,7 @@ The point is selective: zero-hop the public channels, whose statewide noise, tel
 Gateway → EMQX → [ExHook gRPC] → floodgate → modified payload → EMQX → Subscribers
 ```
 
-Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the zeroed packet transparently, including analytics tools. Anything that computes hops as `hop_start - hop_limit` (Malla, for example) shows zero-hopped packets as 0 hops; the sender's original values survive only in floodgate's own log. Meshtastic gateways downlink only the protobuf (`/e/`) topic. The JSON (`/json/`) topic is a human-readable mirror that firmware before 2.8 could publish for monitoring tools — floodgate zero-hops both for consistency.
+Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the zeroed packet transparently, including analytics tools. Anything that computes hops as `hop_start - hop_limit` (Malla, for example) shows zero-hopped packets as 0 hops; to give such tools the original packet, see [Monitoring tools that need the original hop values](#monitoring-tools-that-need-the-original-hop-values). Meshtastic gateways downlink only the protobuf (`/e/`) topic. The JSON (`/json/`) topic is a human-readable mirror that firmware before 2.8 could publish for monitoring tools — floodgate zero-hops both for consistency.
 
 ```
 Before:  hop_limit: 3  hop_start: 3
@@ -321,6 +321,33 @@ When only floodgate restarts, EMQX's gRPC channel reconnects transparently and E
 - floodgate's own per-message log lines (`[ZEROHOP]`, `[PASSTHRU]` …) or `/health` counters rising.
 
 A consequence: `topic_filter` is sent to EMQX only in `OnProviderLoaded`. Changing it and restarting floodgate leaves EMQX on the old filter until the hook is re-registered (or disabled and re-enabled) or EMQX restarts.
+
+### Monitoring tools that need the original hop values
+
+Malla, MeshView and similar tools compute a packet's path from `hop_start - hop_limit`. Because floodgate rewrites the message for **every** subscriber, they see zero-hopped packets as 0 hops. floodgate cannot leave the packet unmodified for some clients only: EMQX's ExHook rewrites a message once, at publish time, and its per-subscriber delivery hook can observe but not change it.
+
+Instead, mirror the original traffic to a second topic tree with an EMQX rule and point the tools at the mirror. This needs no floodgate change, because EMQX runs rule-engine hooks before ExHooks: `message.publish` callbacks run in priority order, and the rule engine registers at `HP_RULE_ENGINE` (900) while ExHooks register at `HP_EXHOOK` (100) ([`emqx_hooks.hrl`](https://github.com/emqx/emqx/blob/release-62/apps/emqx/include/emqx_hooks.hrl)). The rule therefore copies each message before floodgate modifies it.
+
+```bash
+curl -s -X POST "$EMQX/api/v5/rules" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "raw_mirror",
+    "sql": "SELECT * FROM \"msh/#\"",
+    "actions": [{"function": "republish",
+                 "args": {"topic": "raw/${topic}", "qos": "${qos}", "retain": false, "payload": "${payload}"}}],
+    "enable": true
+  }'
+```
+
+(Or in the dashboard: Integration → Rules, SQL `SELECT * FROM "msh/#"`, action *Republish* to `raw/${topic}` with payload `${payload}`.) Monitoring tools then subscribe to `raw/msh/#`; most let you set the root topic, but check yours if it assumes `msh/`.
+
+Verified on EMQX 6.2.0 with floodgate 0.6.0: of 900 packets, sent as three runs of 300 (steady state, after the hook was disabled and re-enabled, and after an EMQX restart), every `raw/` copy was byte-identical to what was published, and every `msh/` copy was zero-hopped. Things to know:
+
+- **Dropped packets are mirrored too.** The rule runs before floodgate decides, so a packet floodgate drops (for example a range test) still appears under `raw/`, though no `msh/` subscriber receives it.
+- **It doubles message volume** for everything under `msh/#`.
+- **Permissions:** the monitoring tools' MQTT users need subscribe access to `raw/#`. Republishing is internal to EMQX and is not subject to client ACLs.
+- **Keep `topic_filter` at `msh/#`.** floodgate skips topics that don't start with `msh/`, so the mirror is never modified either way; a broader filter would only add a wasted hook call for every mirrored message.
 
 ## Security
 
