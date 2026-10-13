@@ -337,6 +337,37 @@ def case_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
     return Outcome(name)
 
 
+def case_zerohop_multihop(pub: Publisher, sub: Subscriber) -> Outcome:
+    """A packet that took 2 relays (3/1) keeps that count: hop_limit 0 so no
+    gateway retransmits it, hop_start 2 so hop_start - hop_limit is still 2."""
+    name = "zerohop-multihop"
+    pre = health_stats()
+    pkt_id = 0xA1A1A1B2
+    body = build_envelope(
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload=b"hello-multihop",
+        packet_id=pkt_id,
+        from_node=0xDEADBEEF,
+        hop_limit=1,
+        hop_start=3,
+    )
+    pub.publish(topic_for("LongFast"), body)
+    time.sleep(SETTLE_SECONDS)
+
+    delivered = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not delivered:
+        return Outcome(name, False, "no packet with our id was delivered")
+    hops = (_parse_hop_limit(delivered[-1].payload), _parse_hop_start(delivered[-1].payload))
+    if hops != (0, 2):
+        return Outcome(name, False, f"delivered hop_limit/hop_start={hops}, expected (0, 2)")
+
+    post = health_stats()
+    if post.get("zerohop", 0) - pre.get("zerohop", 0) < 1:
+        return Outcome(name, False, "stats.zerohop did not increment")
+    return Outcome(name)
+
+
 def case_drop(pub: Publisher, sub: Subscriber) -> Outcome:
     name = "drop"
     pre = health_stats()
@@ -478,7 +509,8 @@ def case_custom_key_not_dropped(pub: Publisher, sub: Subscriber) -> Outcome:
 
 
 def case_json_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
-    """A JSON-topic packet on a zerohop channel has all three hop fields zeroed."""
+    """A JSON-topic packet on a zerohop channel: hop_limit 0, and hop_start and
+    hops_away both carry the hops already travelled (firmware's hops_away)."""
     name = "json-zerohop"
     pre = health_stats()
     pkt_id = 0xA6A6A6A6
@@ -513,8 +545,13 @@ def case_json_zerohop(pub: Publisher, sub: Subscriber) -> Outcome:
         return Outcome(name, False, "packet was not delivered")
     data = delivered[-1]
     hops = (data.get("hop_limit"), data.get("hop_start"), data.get("hops_away"))
-    if hops != (0, 0, 0):
-        return Outcome(name, False, f"hop_limit/hop_start/hops_away = {hops}, expected all 0")
+    if hops != (0, 1, 1):
+        return Outcome(
+            name,
+            False,
+            f"hop_limit/hop_start/hops_away = {hops}, expected (0, 1, 1): "
+            "hop_limit zeroed, hops travelled (1) preserved",
+        )
     if data.get("payload") != {"text": "hello-json"}:
         return Outcome(name, False, "payload did not survive intact")
 
@@ -811,10 +848,108 @@ def case_firmware_traceroute_no_ghost_hops(pub_: Publisher, sub: Subscriber) -> 
     return Outcome(name)
 
 
+def case_firmware_accepts_multihop(pub_: Publisher, sub: Subscriber) -> Outcome:  # noqa: ARG001
+    """Real firmware accepts a zero-hopped packet that reports hops travelled.
+
+    A 3/1 packet (two relays) leaves floodgate as hop_limit 0, hop_start 2. The
+    node must surface it with that count intact -- hop_start > hop_limit is an
+    ordinary packet at the end of its hop budget, but only a real node can say
+    firmware's admission rules agree.
+    """
+    name = "firmware-accepts-multihop"
+    pkt_id = 0x7E570002
+    payload = b"floodgate multihop"
+    body = build_envelope(
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.TEXT_MESSAGE_APP,
+        payload=payload,
+        packet_id=pkt_id,
+        from_node=0x0BADF00D,
+        hop_limit=1,
+        hop_start=3,
+        channel_hash=LONGFAST_HASH,
+    )
+    got = _fw_receive(lambda: pub_.publish(FW_TOPIC, body), pkt_id)
+    if not got:
+        return Outcome(name, False, "node never surfaced the packet")
+    p = got[-1]
+    hops = (p.get("hopLimit") or 0, p.get("hopStart") or 0)
+    if hops != (0, 2):
+        return Outcome(name, False, f"node saw hopLimit/hopStart={hops}, expected (0, 2)")
+    if p.get("decoded", {}).get("payload") != payload:
+        return Outcome(name, False, "payload did not survive intact")
+    return Outcome(name)
+
+
+def case_firmware_traceroute_recorded_relays(pub_: Publisher, sub: Subscriber) -> Outcome:  # noqa: ARG001
+    """A traceroute that really crossed two relays comes back without ghosts.
+
+    The request records relays R1 and R2 in its route and arrives 3/1. floodgate
+    sends it on as 0/2, so firmware's `insertUnknownHops` sees hops claimed (2)
+    equal to relays recorded (2) and pads nothing. Leaving hop_start at 3
+    (pre-0.4.1) would add one ghost; this checks the claim stays truthful.
+    """
+    name = "firmware-traceroute-recorded-relays"
+    try:
+        node = _node_num()
+    except Exception as exc:  # noqa: BLE001
+        return Outcome(name, False, f"could not read the sim node's number: {exc}")
+
+    relays = [0x0A0A0A01, 0x0A0A0A02]
+    request_route = mesh_pb2.RouteDiscovery()
+    request_route.route.extend(relays)
+    pkt_id = 0x7E571002
+    body = build_envelope(
+        channel="LongFast",
+        portnum=portnums_pb2.PortNum.TRACEROUTE_APP,
+        payload=request_route.SerializeToString(),
+        packet_id=pkt_id,
+        from_node=0x0BADF00D,
+        to_node=node,
+        hop_limit=1,
+        hop_start=3,
+        want_response=True,
+        channel_hash=LONGFAST_HASH,
+    )
+    pub_.publish(FW_TOPIC, body)
+    time.sleep(10)
+
+    seen = [m for m in sub.snapshot() if _packet_id_of(m.payload) == pkt_id]
+    if not seen:
+        return Outcome(name, False, "the traceroute request was not delivered")
+    hops = (_parse_hop_limit(seen[-1].payload), _parse_hop_start(seen[-1].payload))
+    if hops != (0, 2):
+        return Outcome(name, False, f"request delivered as limit/start {hops}, expected (0, 2)")
+
+    routes = []
+    for m in sub.snapshot():
+        env = mqtt_pb2.ServiceEnvelope()
+        try:
+            env.ParseFromString(m.payload)
+            if getattr(env.packet, "from") != node:
+                continue
+            d = mesh_pb2.Data()
+            d.ParseFromString(decrypt_payload(env.packet))
+            if d.portnum != portnums_pb2.PortNum.TRACEROUTE_APP or d.request_id != pkt_id:
+                continue
+            r = mesh_pb2.RouteDiscovery()
+            r.ParseFromString(d.payload)
+            routes.append(list(r.route))
+        except Exception:  # noqa: BLE001 - other traffic on msh/# is expected
+            continue
+
+    if not routes:
+        return Outcome(name, False, f"no traceroute response from node {node:#x}")
+    if routes[-1] != relays:
+        return Outcome(name, False, f"response route {routes[-1]}, expected exactly {relays}")
+    return Outcome(name)
+
+
 CASE_SETS: dict[str, list] = {
     # Steady state: floodgate healthy for the whole run.
     "default": [
         case_zerohop,
+        case_zerohop_multihop,
         case_drop,
         case_passthru,
         case_noop,
@@ -826,7 +961,12 @@ CASE_SETS: dict[str, list] = {
     # Run after floodgate is started again.
     "recovery": [case_recovery_after_hook_down],
     # Needs the mesh-sim service; run after it is configured and restarted.
-    "firmware": [case_firmware_accepts_zerohopped, case_firmware_traceroute_no_ghost_hops],
+    "firmware": [
+        case_firmware_accepts_zerohopped,
+        case_firmware_traceroute_no_ghost_hops,
+        case_firmware_accepts_multihop,
+        case_firmware_traceroute_recorded_relays,
+    ],
 }
 
 

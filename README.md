@@ -1,6 +1,6 @@
 # floodgate
 
-Zero-hop MQTT anti-flood service for self-hosted [EMQX](https://www.emqx.io/) brokers serving [Meshtastic](https://meshtastic.org/) networks. Intercepts MQTT PUBLISH events via [EMQX ExHook](https://www.emqx.io/docs/en/latest/extensions/exhook.html) (gRPC) and zeros both `MeshPacket.hop_limit` and `hop_start` in-flight before delivery to subscribers, preventing LoRa rebroadcast floods when gateways downlink MQTT packets.
+Zero-hop MQTT anti-flood service for self-hosted [EMQX](https://www.emqx.io/) brokers serving [Meshtastic](https://meshtastic.org/) networks. Intercepts MQTT PUBLISH events via [EMQX ExHook](https://www.emqx.io/docs/en/latest/extensions/exhook.html) (gRPC) and sets `MeshPacket.hop_limit` to 0 in-flight (and `hop_start` to the hops already travelled, so hop counts stay true) before delivery to subscribers, preventing LoRa rebroadcast floods when gateways downlink MQTT packets.
 
 Tested against EMQX 6.2.0 (ExHook v3 proto, EMQX 5.9.0+). CI runs a real Meshtastic firmware node (`meshtasticd`) against floodgate's output, and the zero-hop and drop behavior was verified on hardware (a Station G2 gateway and an nRF52 node on firmware 2.8.1).
 
@@ -20,20 +20,28 @@ The point is selective: zero-hop the public channels, whose statewide noise, tel
 Gateway → EMQX → [ExHook gRPC] → floodgate → modified payload → EMQX → Subscribers
 ```
 
-Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the zeroed packet transparently, including analytics tools. Anything that computes hops as `hop_start - hop_limit` (Malla, for example) shows zero-hopped packets as 0 hops; the sender's original values survive only in floodgate's own log. Meshtastic gateways downlink only the protobuf (`/e/`) topic. The JSON (`/json/`) topic is a human-readable mirror that firmware before 2.8 could publish for monitoring tools — floodgate zero-hops both for consistency.
+Unlike a standard MQTT subscriber, floodgate modifies payloads **in-flight** — all subscribers receive the modified packet transparently, including analytics tools. Meshtastic gateways downlink only the protobuf (`/e/`) topic. The JSON (`/json/`) topic is a human-readable mirror that firmware before 2.8 could publish for monitoring tools — floodgate zero-hops both for consistency.
 
 ```
-Before:  hop_limit: 3  hop_start: 3
-After:   hop_limit: 0  hop_start: 0  ← both zeroed so receivers don't render ghost hops in traceroute
+                      hop_limit   hop_start   hops travelled (start - limit)
+Heard directly   in:      3           3           0
+                 out:     0           0           0
+Two relays       in:      1           3           2
+                 out:     0           2           2
 ```
 
-Original sender values remain visible in floodgate's per-message log records (extracted before modification). Zeroing `hop_start` alongside `hop_limit` prevents receiving firmware from computing `hopsTaken = hop_start - hop_limit > 0` and padding `RouteDiscovery.route[]` with `0xFFFFFFFF` sentinels (rendered as "Meshtastic ffff (ffff)" in client apps).
+`hop_limit` 0 is what stops every downlinking gateway retransmitting the packet on RF. `hop_start` becomes the hops the packet had already travelled, so `hop_start - hop_limit` — what receiving firmware and monitoring tools (Malla, MeshView) compute — is unchanged:
+
+- **No ghost hops.** Firmware pads a traceroute with "Meshtastic ffff (ffff)" for every hop that `hop_start - hop_limit` claims but the route didn't record. Leaving `hop_start` alone (before 0.4.1) made the claim the full hop limit, so every traceroute grew phantom hops; now the claim equals the relays the packet actually crossed.
+- **True hop counts for monitoring tools.** Zeroing `hop_start` as well (0.4.1–0.6.x) avoided the ghosts but made every packet look direct, and Malla drew a direct link for each; now Malla and MeshView see the real count.
+
+The sender's original values are also kept in floodgate's per-message log records.
 
 What a downlinking gateway then does with each kind of packet (observed on firmware 2.8.1):
 
 | Packet from MQTT | Gateway's own app | Retransmitted on RF |
 |---|---|---|
-| Zero-hopped channel (`hop_limit: 0`) | Shown, as 0 hops | **No** |
+| Zero-hopped channel (`hop_limit: 0`) | Shown, with the hops it travelled to reach MQTT | **No** |
 | Any other channel (e.g. `hop_limit: 3`) | Shown | Yes, with `hop_limit` decremented |
 
 So zero-hopped traffic reaches the gateway's own user and stops there; it never reaches RF neighbors.
@@ -60,13 +68,13 @@ The drop filter runs **before** zero-hop. A packet matching both is reported as 
 If you already have EMQX running, run floodgate as a standalone container on the same host. Images are published to GHCR for amd64 and arm64:
 
 ```bash
-curl -fsSLo my-config.yaml https://raw.githubusercontent.com/eric-becker/floodgate/v0.6.0/config.yaml   # edit to taste
+curl -fsSLo my-config.yaml https://raw.githubusercontent.com/eric-becker/floodgate/v0.7.0/config.yaml   # edit to taste
 docker run -d \
   --name floodgate \
   --restart unless-stopped \
   -v "$(pwd)/my-config.yaml:/app/config.yaml:ro" \
   -p 127.0.0.1:9000:9000 \
-  ghcr.io/eric-becker/floodgate:0.6.0
+  ghcr.io/eric-becker/floodgate:0.7.0
 ```
 
 **Pin a version tag, and fetch `config.yaml` from the same tag.** `latest` is rebuilt on every push to `main`, and its digest differs from the tagged build of the same commit. floodgate refuses to start on a config key it doesn't recognize, so a `config.yaml` from `main` can stop an older image from starting. Read the release notes before bumping: config keys have changed between minor versions.
@@ -150,7 +158,7 @@ See [config.yaml](config.yaml) for a fully annotated example.
 | Key | Default | Description |
 |-----|---------|-------------|
 | `zerohop_enabled` | `true` | Master switch for the zero-hop modifier. |
-| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` and `hop_start` zeroed. |
+| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` set to 0 (and `hop_start` to the hops travelled). |
 | `drop_enabled` | `false` | Master switch for the drop filter (deny entirely). |
 | `drop_channels` | `"zerohop_channels"` | Channels on which the drop filter runs. List of channels, the literal string `"zerohop_channels"` to inherit, or `null` for all channels. |
 | `drop_portnums` | `[]` | Meshtastic portnums (proto enum names like `RANGE_TEST_APP`) to drop. |
@@ -380,7 +388,7 @@ Per-message outcomes are logged at **INFO** — no special flags required. Field
 2026-10-11 01:53:16 INFO     [floodgate.exhook_server] [STATS] interval_s=60 zerohop=142 passthru=1 noop=0 dropped=4 skipped=1050 errors=0 total=1197
 ```
 
-`hop_limit` and `hop_start` on `[ZEROHOP]` lines are the sender's original values; the delivered packet has both at 0. A value containing a space, `=`, quote, backslash or control character is double-quoted with those characters escaped, so a crafted topic cannot forge a log line or a `key=value` field.
+`hop_limit` and `hop_start` on `[ZEROHOP]` lines are the sender's original values; the delivered packet has `hop_limit` 0 and `hop_start` = original `hop_start - hop_limit`. A value containing a space, `=`, quote, backslash or control character is double-quoted with those characters escaped, so a crafted topic cannot forge a log line or a `key=value` field.
 
 **JSON mode** (`log_format: json` or `FLOODGATE_LOG_FORMAT=json`); timestamps are UTC:
 ```json
@@ -426,14 +434,14 @@ MeshPacket {
   from:       0xa2e1a8c4
   to:         0xffffffff
   id:         3827461829
-  hop_limit:  0            ← zeroed — a gateway shows it but does not retransmit it
-  hop_start:  0            ← zeroed so receivers don't render ghost hops in traceroute
+  hop_limit:  0            ← a gateway shows it but does not retransmit it
+  hop_start:  0            ← hops travelled (3 - 3): start - limit stays true
   channel:    8
   payload:    <encrypted Data protobuf>   (unchanged)
 }
 ```
 
-The JSON topic mirror (`/json/LongFast/!a2e1a8c4`) is zeroed the same way: `hop_limit` is set to `0` (added if absent, since firmware's JSON omits it), and `hop_start` and `hops_away` are zeroed when present.
+The JSON topic mirror (`/json/LongFast/!a2e1a8c4`) gets the same rule: `hop_limit` is set to `0` (added if absent, since firmware's JSON omits it), and `hop_start` becomes the hops travelled — firmware's own `hops_away`, which stays as it was.
 
 ## Development
 

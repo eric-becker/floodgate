@@ -24,10 +24,10 @@ Everything runs on the private `floodgate-test-net` bridge. Only `18083` (EMQX d
 
 | `CASE_SET` | floodgate | Asserts |
 |---|---|---|
-| `default` | up | zerohop, drop, passthru, noop, custom-key-not-dropped, json-zerohop — delivered bytes **and** `/health` deltas |
+| `default` | up | zerohop, zerohop-multihop, drop, passthru, noop, custom-key-not-dropped, json-zerohop — delivered bytes **and** `/health` deltas |
 | `hook-down` | **stopped** | packet delivered **unmodified**, `metrics.failed` rises |
 | `recovery` | restarted | zerohop resumes via `auto_reconnect` |
-| `firmware` | up | a real node **accepts** the zero-hopped packet; the traceroute request is zero-hopped on the bus and the reply has **no ghost hops** |
+| `firmware` | up | a real node **accepts** zero-hopped packets, direct (0/0) and multi-hop (0/2); traceroutes come back with **no ghost hops**, both direct and through two recorded relays |
 
 Before any pass, `exhook-init` registers the hook and fails unless EMQX reports every node
 `connected` (EMQX 6 has `node_status[]`, not a top-level `status`).

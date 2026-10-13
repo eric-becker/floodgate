@@ -278,8 +278,14 @@ def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
         if old_hop == 0:
             return None, 0, meta
 
+        # hop_limit 0 stops every downlinking gateway retransmitting on RF.
+        # hop_start becomes the hops already travelled, so hop_start -
+        # hop_limit -- what receivers and monitoring tools compute -- is
+        # unchanged. Leaving hop_start alone (pre-0.4.1) made that difference
+        # the full hop limit and padded traceroutes with ghost hops (#46);
+        # zeroing it (0.4.1-0.6.x) made every packet look direct.
+        envelope.packet.hop_start = _hops_travelled(pkt.hop_start, old_hop)
         envelope.packet.hop_limit = 0
-        envelope.packet.hop_start = 0
         modified = envelope.SerializeToString()
         logger.debug("zerohop_protobuf: serialized %d bytes", len(modified))
 
@@ -354,16 +360,28 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
     if old_hop == 0:
         return None, 0, meta
 
-    # Zero hop_limit, hop_start, and hops_away together. Setting only
-    # hop_limit makes downstream consumers compute non-zero hops-taken
-    # (hop_start - hop_limit, or hop_start - hops_away) which produces
-    # ghost-hop renderings in traceroute UIs. See issue #46.
+    # Same rule as the protobuf path: hop_limit 0, hop_start = hops already
+    # travelled. Firmware's JSON has no hop_limit; its hops_away already is
+    # the hops travelled, and stays consistent (hop_start - hop_limit).
+    if "hop_start" in data:
+        travelled = _hops_travelled(data["hop_start"], old_hop)
+    else:
+        travelled = data.get("hops_away")
     data["hop_limit"] = 0
     if "hop_start" in data:
-        data["hop_start"] = 0
-    if "hops_away" in data:
-        data["hops_away"] = 0
+        data["hop_start"] = travelled
+    if "hops_away" in data and travelled is not None:
+        data["hops_away"] = travelled
     return _json.dumps(data).encode(), old_hop, meta
+
+
+def _hops_travelled(hop_start: int, hop_limit: int) -> int:
+    """Hops a packet had already taken when it reached MQTT, never negative.
+
+    hop_start is 0 on pre-2.3 firmware, which never set it; a hop_start below
+    hop_limit is malformed. Both yield 0.
+    """
+    return max(0, hop_start - hop_limit)
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,8 @@
 # floodgate configuration
 
-# Zerohop: set hop_limit and hop_start to 0 and let EMQX deliver the modified
-# packet. A downlinking gateway shows it to its own user but never retransmits
-# it on RF. Booleans must be unquoted: a quoted "false" is rejected.
+# Zerohop: set hop_limit to 0 (and hop_start to the hops already travelled, so
+# hop counts stay true) and let EMQX deliver the modified packet. A downlinking
+# gateway shows it to its own user but never retransmits it on RF. Booleans must be unquoted: a quoted "false" is rejected.
 zerohop_enabled: true
 
 # Channels to zero-hop. Standard Meshtastic public presets.
