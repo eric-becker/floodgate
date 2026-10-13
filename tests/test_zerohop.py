@@ -175,23 +175,20 @@ class TestZerohopJson:
         assert modified is not None
         assert json.loads(modified)["hop_limit"] == 0
 
-    def test_directly_heard_packet_gets_hop_start_zero(self):
-        """hop_start becomes the hops travelled -- 0 for a 3/3 packet -- so JSON
-        consumers computing hops-taken don't see the full hop limit (#46)."""
+    def test_hop_start_is_unchanged(self):
         modified, _, _ = zerohop_json(self._payload(hop_limit=3, hop_start=3))
         assert modified is not None
         data = json.loads(modified)
         assert data["hop_limit"] == 0
-        assert data["hop_start"] == 0
+        assert data["hop_start"] == 3
 
-    def test_hops_travelled_is_preserved(self):
-        """Firmware JSON carries hops_away (hops already travelled). After
-        zero-hop, hop_start becomes that count and hops_away keeps it, so
-        consumers computing hop_start - hop_limit still get the real 2."""
+    def test_hops_away_is_unchanged(self):
+        """Firmware JSON carries hops_away, not hop_limit. Zero-hop adds
+        hop_limit 0 and leaves hop_start and hops_away as published."""
         modified, _, _ = zerohop_json(self._payload_meshtastic(hop_start=5, hops_away=2))
         assert modified is not None
         data = json.loads(modified)
-        assert (data["hop_limit"], data["hop_start"], data["hops_away"]) == (0, 2, 2)
+        assert (data["hop_limit"], data["hop_start"], data["hops_away"]) == (0, 5, 2)
 
     def test_uses_hops_away_when_no_hop_limit(self):
         modified, old_hop, _ = zerohop_json(self._payload_meshtastic(hop_start=5, hops_away=0))
@@ -247,16 +244,15 @@ class TestZerohopJson:
 
 
 class TestZerohopProtobufHopFields:
-    """hop_start must move with hop_limit (#46).
+    """Only hop_limit changes; hop_start is left as the sender set it.
 
-    Setting only hop_limit=0 (with hop_start unchanged) makes Meshtastic
-    firmware compute hopsTaken = hop_start - hop_limit = the full hop limit,
-    and pad RouteDiscovery.route[] with 0xFFFFFFFF sentinels rendered as
-    'Meshtastic ffff (ffff)' in the apps. For this directly-heard 3/3 packet
-    the hops travelled are 0, so hop_start must come out 0.
+    This matches mqtt.meshtastic.org's zero-hop policy. The cost is that
+    receivers compute hopsTaken = hop_start - hop_limit = the full hop limit,
+    and pad traceroutes with 'Meshtastic ffff (ffff)' for the unrecorded
+    difference (#46; README, "How It Works").
     """
 
-    def test_hop_start_follows_hop_limit(self):
+    def test_hop_start_is_left_alone(self):
         pytest.importorskip("meshtastic")
         from meshtastic import mesh_pb2, mqtt_pb2, portnums_pb2
 
@@ -287,11 +283,7 @@ class TestZerohopProtobufHopFields:
         modified = mqtt_pb2.ServiceEnvelope()
         modified.ParseFromString(modified_bytes)
         assert modified.packet.hop_limit == 0
-        assert modified.packet.hop_start == 0, (
-            "hop_start must become the hops travelled (0 here); otherwise "
-            "firmware computes hopsTaken = the full hop limit and pads the "
-            "RouteDiscovery route with 'Meshtastic ffff (ffff)' sentinels"
-        )
+        assert modified.packet.hop_start == 3
 
 
 # ---------------------------------------------------------------------------
@@ -931,7 +923,7 @@ class TestProcessMessageUnmockedProtobuf:
         modified = mqtt_pb2.ServiceEnvelope()
         modified.ParseFromString(result.payload)
         assert modified.packet.hop_limit == 0
-        assert modified.packet.hop_start == 0
+        assert modified.packet.hop_start == 3
         assert modified.packet.id == packet_id
         assert modified.channel_id == "LongFast"
 
@@ -1123,7 +1115,7 @@ class TestHopLimitBoundary:
         assert old_hop == 1
         out = mqtt_pb2.ServiceEnvelope()
         out.ParseFromString(modified)
-        assert (out.packet.hop_limit, out.packet.hop_start) == (0, 2)  # 3 - 1 travelled
+        assert (out.packet.hop_limit, out.packet.hop_start) == (0, 3)
 
 
 class TestProtobufDropThroughPipeline:
@@ -1193,24 +1185,22 @@ class TestTopicShapeEdges:
         assert parse_meshtastic_topic(topic) is None
 
 
-class TestHopsTravelledPreserved:
-    """Zero-hop sets hop_limit to 0 and hop_start to the hops already
-    travelled, so hop_start - hop_limit is unchanged: monitoring tools keep the
-    real hop count, and receivers don't pad traceroutes with ghost hops
-    (they only pad hops that the count claims but the route didn't record)."""
+class TestHopStartUnchanged:
+    """Zero-hop sets hop_limit to 0 and leaves every other hop field as the
+    sender set it, matching mqtt.meshtastic.org. Receivers therefore compute
+    hop_start - hop_limit = hop_start: the sender's full hop limit."""
 
     @pytest.mark.parametrize(
-        "hop_start,hop_limit,want_start",
+        "hop_start,hop_limit",
         [
-            (3, 3, 0),  # heard directly by the uplinking gateway
-            (3, 1, 2),  # two relays
-            (7, 2, 5),
-            (3, 2, 1),
-            (0, 3, 0),  # pre-2.3 firmware never set hop_start
-            (2, 5, 0),  # malformed: start < limit; clamp, never negative
+            (3, 3),  # heard directly by the uplinking gateway
+            (3, 1),  # two relays
+            (7, 2),
+            (0, 3),  # pre-2.3 firmware never set hop_start
+            (2, 5),  # malformed: start < limit; passed on as is
         ],
     )
-    def test_protobuf(self, hop_start, hop_limit, want_start):
+    def test_protobuf(self, hop_start, hop_limit):
         mesh_pb2 = pytest.importorskip("meshtastic.mesh_pb2")
         mqtt_pb2 = pytest.importorskip("meshtastic.mqtt_pb2")
         env = mqtt_pb2.ServiceEnvelope(channel_id="LongFast", gateway_id="!aabbccdd")
@@ -1219,24 +1209,23 @@ class TestHopsTravelledPreserved:
         )
         modified, old_hop, meta = zerohop_protobuf(env.SerializeToString())
         assert old_hop == hop_limit
-        assert meta["hop_start"] == hop_start  # the log keeps the sender's values
+        assert meta["hop_start"] == hop_start
         out = mqtt_pb2.ServiceEnvelope()
         out.ParseFromString(modified)
-        assert (out.packet.hop_limit, out.packet.hop_start) == (0, want_start)
+        assert (out.packet.hop_limit, out.packet.hop_start) == (0, hop_start)
 
     @pytest.mark.parametrize(
         "packet,want",
         [
             # firmware shape: hop_start + hops_away, no hop_limit
-            ({"hop_start": 3, "hops_away": 0}, {"hop_limit": 0, "hop_start": 0, "hops_away": 0}),
-            ({"hop_start": 5, "hops_away": 3}, {"hop_limit": 0, "hop_start": 3, "hops_away": 3}),
+            ({"hop_start": 3, "hops_away": 0}, {"hop_limit": 0, "hop_start": 3, "hops_away": 0}),
+            ({"hop_start": 5, "hops_away": 3}, {"hop_limit": 0, "hop_start": 5, "hops_away": 3}),
             # explicit hop_limit (non-firmware publishers)
-            ({"hop_start": 5, "hop_limit": 3}, {"hop_limit": 0, "hop_start": 2}),
+            ({"hop_start": 5, "hop_limit": 3}, {"hop_limit": 0, "hop_start": 5}),
             (
                 {"hop_start": 5, "hop_limit": 3, "hops_away": 2},
-                {"hop_limit": 0, "hop_start": 2, "hops_away": 2},
+                {"hop_limit": 0, "hop_start": 5, "hops_away": 2},
             ),
-            # hop_limit only: nothing to preserve
             ({"hop_limit": 3}, {"hop_limit": 0}),
         ],
     )
@@ -1244,18 +1233,3 @@ class TestHopsTravelledPreserved:
         modified, _, _ = zerohop_json(json.dumps({"id": 1, **packet}).encode())
         data = json.loads(modified)
         assert {k: data[k] for k in ("hop_limit", "hop_start", "hops_away") if k in data} == want
-
-    def test_hop_count_seen_by_consumers_is_unchanged(self):
-        """The property monitoring tools rely on: hop_start - hop_limit."""
-        mesh_pb2 = pytest.importorskip("meshtastic.mesh_pb2")
-        mqtt_pb2 = pytest.importorskip("meshtastic.mqtt_pb2")
-        for hs, hl in [(3, 3), (3, 1), (7, 0), (7, 7), (5, 1)]:
-            env = mqtt_pb2.ServiceEnvelope(channel_id="LongFast", gateway_id="!aabbccdd")
-            env.packet.CopyFrom(mesh_pb2.MeshPacket(id=9, hop_limit=hl, hop_start=hs))
-            modified, _, _ = zerohop_protobuf(env.SerializeToString())
-            if modified is None:  # hop_limit already 0: delivered unchanged
-                continue
-            out = mqtt_pb2.ServiceEnvelope()
-            out.ParseFromString(modified)
-            assert out.packet.hop_start - out.packet.hop_limit == hs - hl
-            assert out.packet.hop_limit == 0

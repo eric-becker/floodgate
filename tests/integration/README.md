@@ -27,7 +27,7 @@ Everything runs on the private `floodgate-test-net` bridge. Only `18083` (EMQX d
 | `default` | up | zerohop, zerohop-multihop, drop, passthru, noop, custom-key-not-dropped, json-zerohop — delivered bytes **and** `/health` deltas |
 | `hook-down` | **stopped** | packet delivered **unmodified**, `metrics.failed` rises |
 | `recovery` | restarted | zerohop resumes via `auto_reconnect` |
-| `firmware` | up | a real node **accepts** zero-hopped packets, direct (0/0) and multi-hop (0/2); traceroutes come back with **no ghost hops**, both direct and through two recorded relays |
+| `firmware` | up | a real node **accepts** a zero-hopped packet (0/3); traceroutes are answered with exactly the ghost hops the rule implies, both direct (3) and through two recorded relays (relays + 1) |
 
 Before any pass, `exhook-init` registers the hook and fails unless EMQX reports every node
 `connected` (EMQX 6 has `node_status[]`, not a top-level `status`).
@@ -51,10 +51,11 @@ classifyHopStart():  hop_start == 0  ─┬─ decoded Data has bitfield → VAL
 Firmware ≥ 2.5.0 always sets that bitfield, so real traffic is fine — but a synthetic packet
 without it is dropped, and no unit test models this. Ghost hops come from the same counters:
 `TraceRouteModule::insertUnknownHops` pads the route with `NODENUM_BROADCAST` ("ffff") once per hop
-that `hop_start - hop_limit` claims but the route doesn't record. Zeroing `hop_limit` alone left
-`hop_start` intact, so every packet claimed the full hop limit. Revert that and the case fails with
-3 ghosts — verified, not assumed. An unmodified 3/3 packet has no ghosts either, so the case first
-checks that the request really was zero-hopped on the bus.
+that `hop_start - hop_limit` claims but the route doesn't record. floodgate leaves `hop_start`
+alone (as mqtt.meshtastic.org does), so a zero-hopped packet claims the sender's full hop limit;
+the traceroute cases pin the resulting ghost count, so any change to the hop rule shows up here.
+An unmodified 3/3 packet has no ghosts, so each case first checks that the request really was
+zero-hopped on the bus.
 
 Deliberately **one portnum**: portnum handling is covered by the unit suite, and admission is
 portnum-independent. More cases here would add setup, not signal.

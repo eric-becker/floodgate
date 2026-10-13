@@ -272,19 +272,13 @@ def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
         pkt = envelope.packet
         old_hop = pkt.hop_limit
         logger.debug("zerohop_protobuf: old_hop=%d", old_hop)
-        # Extract before zeroing: `pkt` aliases envelope.packet, so reading it
-        # afterwards would log hop_start=0 instead of the sender's value.
         meta = _extract_proto_meta(pkt)
         if old_hop == 0:
             return None, 0, meta
 
         # hop_limit 0 stops every downlinking gateway retransmitting on RF.
-        # hop_start becomes the hops already travelled, so hop_start -
-        # hop_limit -- what receivers and monitoring tools compute -- is
-        # unchanged. Leaving hop_start alone (pre-0.4.1) made that difference
-        # the full hop limit and padded traceroutes with ghost hops (#46);
-        # zeroing it (0.4.1-0.6.x) made every packet look direct.
-        envelope.packet.hop_start = _hops_travelled(pkt.hop_start, old_hop)
+        # hop_start is left as the sender set it, as mqtt.meshtastic.org does
+        # for its zero-hop policy (see README, "How It Works").
         envelope.packet.hop_limit = 0
         modified = envelope.SerializeToString()
         logger.debug("zerohop_protobuf: serialized %d bytes", len(modified))
@@ -360,28 +354,9 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
     if old_hop == 0:
         return None, 0, meta
 
-    # Same rule as the protobuf path: hop_limit 0, hop_start = hops already
-    # travelled. Firmware's JSON has no hop_limit; its hops_away already is
-    # the hops travelled, and stays consistent (hop_start - hop_limit).
-    if "hop_start" in data:
-        travelled = _hops_travelled(data["hop_start"], old_hop)
-    else:
-        travelled = data.get("hops_away")
+    # Same rule as the protobuf path: only hop_limit changes.
     data["hop_limit"] = 0
-    if "hop_start" in data:
-        data["hop_start"] = travelled
-    if "hops_away" in data and travelled is not None:
-        data["hops_away"] = travelled
     return _json.dumps(data).encode(), old_hop, meta
-
-
-def _hops_travelled(hop_start: int, hop_limit: int) -> int:
-    """Hops a packet had already taken when it reached MQTT, never negative.
-
-    hop_start is 0 on pre-2.3 firmware, which never set it; a hop_start below
-    hop_limit is malformed. Both yield 0.
-    """
-    return max(0, hop_start - hop_limit)
 
 
 # ---------------------------------------------------------------------------

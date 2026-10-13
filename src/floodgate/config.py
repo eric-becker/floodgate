@@ -24,7 +24,7 @@ _REMOVED_KEYS = {
 }
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    # Zerohop: set hop_limit to 0 and hop_start to the hops travelled, then deliver.
+    # Zerohop: set hop_limit to 0, then deliver.
     "zerohop_enabled": True,
     "zerohop_channels": [
         "LongTurbo",

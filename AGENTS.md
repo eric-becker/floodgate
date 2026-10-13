@@ -5,7 +5,7 @@
 
 MQTT anti-flood service for Meshtastic with two operations:
 
-- **Zero-hop** — set `MeshPacket.hop_limit` to 0 and `hop_start` to the hops already travelled (`hop_start - hop_limit`, never negative) in-flight, then deliver. `hop_start - hop_limit` is therefore unchanged: no traceroute ghost hops, and monitoring tools keep true hop counts. Default for the standard public channel presets. A downlinking gateway shows the packet but never retransmits it on RF; private channels pass through untouched so they keep bridging MQTT and RF.
+- **Zero-hop** — set `MeshPacket.hop_limit` to 0 in-flight, then deliver; `hop_start` is left as the sender set it, matching mqtt.meshtastic.org's zero-hop policy. Receivers therefore compute `hop_start - hop_limit` = the sender's full hop limit (README, "How It Works"). Default for the standard public channel presets. A downlinking gateway shows the packet but never retransmits it on RF; private channels pass through untouched so they keep bridging MQTT and RF.
 - **Drop** — deny a publish entirely so EMQX never delivers it. Off by default; intended for portnum-based spam (e.g. `RANGE_TEST_APP` on the public channels, which only pre-2.8 firmware emits: 2.8 compiles the module out, meshtastic/firmware#11150).
 
 Drop runs *before* zero-hop. Both are evaluated per message via the EMQX ExHook gRPC interface.
@@ -30,7 +30,7 @@ Gateway → EMQX → [ExHook gRPC] → floodgate → drop / modify / passthru �
 | `docker-compose.test.yaml`       | Integration test stack (emqx, floodgate, exhook-init, mesh-sim, test-driver) on an isolated bridge network; host ports on loopback only. |
 | `scripts/run-integration.sh`     | Integration harness orchestrator — `--keep` leaves the stack up, `--teardown` removes it. |
 | `tests/integration/`             | Integration test assets: floodgate config, ExHook init container, test-driver image + cases. Four passes: `default`, `hook-down`, `recovery`, `firmware` (a real meshtasticd node, pinned by digest). |
-| `tests/test_roundtrip.py`        | Round-trip fidelity: ciphertext byte-identical, packet still decrypts, only `hop_limit`/`hop_start` change, unknown fields survive. Guards the silent-corruption class field assertions can't see. |
+| `tests/test_roundtrip.py`        | Round-trip fidelity: ciphertext byte-identical, packet still decrypts, only `hop_limit` changes, unknown fields survive. Guards the silent-corruption class field assertions can't see. |
 | `charts/floodgate/`              | Helm chart (supported install path). Values mirror `config.yaml` 1:1; rendered chart is validated in CI. |
 | `k8s/`                           | Static `kubectl apply -f` manifests, deprecated in favor of the chart. |
 | `.github/workflows/ci.yml`       | The only workflow: version, lint, test, smoke, integration, manifests, then image push and GitHub release (push/tag only, after everything passes). |
@@ -94,7 +94,7 @@ Drop runs **before** zerohop. A packet matched by drop is denied entirely and ne
 | Key | Default | Effect |
 |-----|---------|--------|
 | `zerohop_enabled` | `true` | Master switch for the zero-hop modifier. |
-| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` set to 0 (and `hop_start` to the hops travelled). |
+| `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` set to 0. |
 | `drop_enabled` | `false` | Master switch for the drop filter. |
 | `drop_channels` | `"zerohop_channels"` | Drop scope. List of channels, the literal string `"zerohop_channels"` to inherit, or `null` for all channels. |
 | `drop_portnums` | `[]` | Exact Meshtastic `PortNum` names (like `RANGE_TEST_APP`) to drop; unknown names are rejected. Readable only on default-key (`AQ==`) protobuf channels and for the few JSON types firmware labels (range test is not one). A custom-keyed packet can, rarely, decrypt into a matching portnum, so keep `drop_channels` scoped. |
