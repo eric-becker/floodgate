@@ -134,7 +134,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Integration: EMQX + floodgate + a real meshtasticd node, in Docker Compose.
-  # Passes: default cases, hook-down (fail-open), recovery, firmware.
+  # Passes: default cases, hook-down (fail-open), recovery, firmware, travelled.
   # ---------------------------------------------------------------------------
   integration:
     name: Integration test (compose stack)

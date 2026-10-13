@@ -5,7 +5,7 @@
 
 MQTT anti-flood service for Meshtastic with two operations:
 
-- **Zero-hop** — set `MeshPacket.hop_limit` to 0 in-flight, then deliver; `hop_start` is left as the sender set it, matching mqtt.meshtastic.org's zero-hop policy. Receivers therefore compute `hop_start - hop_limit` = the sender's full hop limit (README, "How It Works"). Default for the standard public channel presets. A downlinking gateway shows the packet but never retransmits it on RF; private channels pass through untouched so they keep bridging MQTT and RF.
+- **Zero-hop** — set `MeshPacket.hop_limit` to 0 in-flight, then deliver. `zerohop_hop_start` decides `hop_start`: `keep` (default) leaves it as the sender set it, matching mqtt.meshtastic.org byte for byte; `travelled` sets it to the hops already travelled so `hop_start - hop_limit` stays true (README, "How It Works"). Default for the standard public channel presets. A downlinking gateway shows the packet but never retransmits it on RF; private channels pass through untouched so they keep bridging MQTT and RF.
 - **Drop** — deny a publish entirely so EMQX never delivers it. Off by default; intended for portnum-based spam (e.g. `RANGE_TEST_APP` on the public channels, which only pre-2.8 firmware emits: 2.8 compiles the module out, meshtastic/firmware#11150).
 
 Drop runs *before* zero-hop. Both are evaluated per message via the EMQX ExHook gRPC interface.
@@ -95,6 +95,7 @@ Drop runs **before** zerohop. A packet matched by drop is denied entirely and ne
 |-----|---------|--------|
 | `zerohop_enabled` | `true` | Master switch for the zero-hop modifier. |
 | `zerohop_channels` | 8 standard presets | Channels whose packets get `hop_limit` set to 0. |
+| `zerohop_hop_start` | `"keep"` | `"keep"`: leave `hop_start` as sent (mqtt.meshtastic.org parity). `"travelled"`: set it to `hop_start - hop_limit`. |
 | `drop_enabled` | `false` | Master switch for the drop filter. |
 | `drop_channels` | `"zerohop_channels"` | Drop scope. List of channels, the literal string `"zerohop_channels"` to inherit, or `null` for all channels. |
 | `drop_portnums` | `[]` | Exact Meshtastic `PortNum` names (like `RANGE_TEST_APP`) to drop; unknown names are rejected. Readable only on default-key (`AQ==`) protobuf channels and for the few JSON types firmware labels (range test is not one). A custom-keyed packet can, rarely, decrypt into a matching portnum, so keep `drop_channels` scoped. |

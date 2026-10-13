@@ -109,6 +109,7 @@ class TestLoadConfigDefaults:
             ("grpc_port", 9000),
             ("health_port", 8080),
             ("log_format", "text"),
+            ("zerohop_hop_start", "keep"),
             ("_drop_portnums_set", set()),
         ],
     )
@@ -511,6 +512,16 @@ class TestValueValidation:
     def test_log_format_rejects_unknown(self, tmp_path, value):
         with pytest.raises(ConfigError, match="log_format"):
             _load(tmp_path, {"log_format": value})
+
+    @pytest.mark.parametrize("value", ["keep", "travelled"])
+    def test_zerohop_hop_start_accepts_modes(self, tmp_path, value):
+        assert _load(tmp_path, {"zerohop_hop_start": value})["zerohop_hop_start"] == value
+
+    @pytest.mark.parametrize("value", ["Keep", "traveled", "zero", "", None, True, 0])
+    def test_zerohop_hop_start_rejects_unknown(self, tmp_path, value):
+        # Exact spellings only: "traveled" would otherwise be a silent no-op.
+        with pytest.raises(ConfigError, match="zerohop_hop_start"):
+            _load(tmp_path, {"zerohop_hop_start": value})
 
     def test_log_format_env_var_validated(self, monkeypatch):
         monkeypatch.delenv("FLOODGATE_CONFIG", raising=False)

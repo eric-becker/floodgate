@@ -1,0 +1,5 @@
+# Used by run-integration.sh for the `travelled` pass: floodgate is recreated
+# with this file. Everything else is floodgate's defaults (the eight preset
+# channels zero-hopped, drop off).
+zerohop_hop_start: "travelled"
+stats_interval_s: 10

@@ -51,6 +51,7 @@ def _make_config(
     drop_enabled=False,
     drop_channels=None,
     drop_portnums=(),
+    zerohop_hop_start="keep",
 ):
     """Build a fully-resolved config dict (with the precomputed sets that
     load_config would otherwise produce). Tests skip load_config to keep
@@ -60,6 +61,7 @@ def _make_config(
         "zerohop_enabled": zerohop_enabled,
         "zerohop_channels": list(zerohop_channels),
         "_zerohop_channels_set": zerohop_set,
+        "zerohop_hop_start": zerohop_hop_start,
         "drop_enabled": drop_enabled,
         "drop_channels": drop_channels,
         "_drop_channels_set": set(drop_channels) if drop_channels else None,
@@ -317,6 +319,17 @@ class TestProcessMessage:
             result = process_message("msh/US/CA/2/json/LongFast/!1234", b"json", config)
         assert result.action == ACTION_MODIFY
         assert result.payload == b'{"hop_limit":0}'
+
+    @pytest.mark.parametrize("mode", ["keep", "travelled"])
+    @pytest.mark.parametrize(
+        "encoding,target", [("e", "zerohop_protobuf"), ("json", "zerohop_json")]
+    )
+    def test_passes_hop_start_mode_through(self, mode, encoding, target):
+        config = _make_config(zerohop_channels=["LongFast"], zerohop_hop_start=mode)
+        with patch(f"floodgate.zerohop.{target}") as mock_zh:
+            mock_zh.return_value = (b"modified", 3, {})
+            process_message(f"msh/US/2/{encoding}/LongFast/!1234", b"x", config)
+        assert mock_zh.call_args.args[1] == mode
 
     def test_zerohops_deep_topic(self):
         config = _make_config(zerohop_channels=["LongFast"])
@@ -1233,3 +1246,86 @@ class TestHopStartUnchanged:
         modified, _, _ = zerohop_json(json.dumps({"id": 1, **packet}).encode())
         data = json.loads(modified)
         assert {k: data[k] for k in ("hop_limit", "hop_start", "hops_away") if k in data} == want
+
+
+class TestHopStartTravelled:
+    """`zerohop_hop_start: travelled` sets hop_limit to 0 and hop_start to the
+    hops already travelled, so hop_start - hop_limit is unchanged: monitoring
+    tools keep the real hop count, and receivers don't pad traceroutes with
+    ghost hops (they only pad hops that the count claims but the route didn't
+    record)."""
+
+    @pytest.mark.parametrize(
+        "hop_start,hop_limit,want_start",
+        [
+            (3, 3, 0),  # heard directly by the uplinking gateway
+            (3, 1, 2),  # two relays
+            (7, 2, 5),
+            (3, 2, 1),
+            (0, 3, 0),  # pre-2.3 firmware never set hop_start
+            (2, 5, 0),  # malformed: start < limit; clamp, never negative
+        ],
+    )
+    def test_protobuf(self, hop_start, hop_limit, want_start):
+        mesh_pb2 = pytest.importorskip("meshtastic.mesh_pb2")
+        mqtt_pb2 = pytest.importorskip("meshtastic.mqtt_pb2")
+        env = mqtt_pb2.ServiceEnvelope(channel_id="LongFast", gateway_id="!aabbccdd")
+        env.packet.CopyFrom(
+            mesh_pb2.MeshPacket(id=7, hop_limit=hop_limit, hop_start=hop_start, encrypted=b"\x01")
+        )
+        modified, old_hop, meta = zerohop_protobuf(env.SerializeToString(), "travelled")
+        assert old_hop == hop_limit
+        assert meta["hop_start"] == hop_start  # the log keeps the sender's values
+        out = mqtt_pb2.ServiceEnvelope()
+        out.ParseFromString(modified)
+        assert (out.packet.hop_limit, out.packet.hop_start) == (0, want_start)
+
+    @pytest.mark.parametrize(
+        "packet,want",
+        [
+            # firmware shape: hop_start + hops_away, no hop_limit
+            ({"hop_start": 3, "hops_away": 0}, {"hop_limit": 0, "hop_start": 0, "hops_away": 0}),
+            ({"hop_start": 5, "hops_away": 3}, {"hop_limit": 0, "hop_start": 3, "hops_away": 3}),
+            # explicit hop_limit (non-firmware publishers)
+            ({"hop_start": 5, "hop_limit": 3}, {"hop_limit": 0, "hop_start": 2}),
+            (
+                {"hop_start": 5, "hop_limit": 3, "hops_away": 2},
+                {"hop_limit": 0, "hop_start": 2, "hops_away": 2},
+            ),
+            # hop_limit only: nothing to preserve
+            ({"hop_limit": 3}, {"hop_limit": 0}),
+        ],
+    )
+    def test_json(self, packet, want):
+        modified, _, _ = zerohop_json(json.dumps({"id": 1, **packet}).encode(), "travelled")
+        data = json.loads(modified)
+        assert {k: data[k] for k in ("hop_limit", "hop_start", "hops_away") if k in data} == want
+
+    def test_hop_count_seen_by_consumers_is_unchanged(self):
+        """The property monitoring tools rely on: hop_start - hop_limit."""
+        mesh_pb2 = pytest.importorskip("meshtastic.mesh_pb2")
+        mqtt_pb2 = pytest.importorskip("meshtastic.mqtt_pb2")
+        for hs, hl in [(3, 3), (3, 1), (7, 7), (5, 1)]:
+            env = mqtt_pb2.ServiceEnvelope(channel_id="LongFast", gateway_id="!aabbccdd")
+            env.packet.CopyFrom(mesh_pb2.MeshPacket(id=9, hop_limit=hl, hop_start=hs))
+            modified, _, _ = zerohop_protobuf(env.SerializeToString(), "travelled")
+            out = mqtt_pb2.ServiceEnvelope()
+            out.ParseFromString(modified)
+            assert out.packet.hop_limit == 0
+            assert out.packet.hop_start - out.packet.hop_limit == hs - hl
+
+    def test_through_process_message(self):
+        """End to end, unmocked: the config setting reaches the packet."""
+        mesh_pb2 = pytest.importorskip("meshtastic.mesh_pb2")
+        mqtt_pb2 = pytest.importorskip("meshtastic.mqtt_pb2")
+        env = mqtt_pb2.ServiceEnvelope(channel_id="LongFast", gateway_id="!aabbccdd")
+        env.packet.CopyFrom(mesh_pb2.MeshPacket(id=11, hop_limit=1, hop_start=3, encrypted=b"\x01"))
+        result = process_message(
+            "msh/US/2/e/LongFast/!aabbccdd",
+            env.SerializeToString(),
+            _make_config(zerohop_channels=["LongFast"], zerohop_hop_start="travelled"),
+        )
+        assert result.action == ACTION_MODIFY
+        out = mqtt_pb2.ServiceEnvelope()
+        out.ParseFromString(result.payload)
+        assert (out.packet.hop_limit, out.packet.hop_start) == (0, 2)

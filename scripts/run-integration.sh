@@ -164,6 +164,34 @@ if [ $rc -eq 0 ]; then
     echo "==> firmware exit code: $rc"
 fi
 
+# ---------------------------------------------------------------------------
+# The other `zerohop_hop_start` mode: recreate floodgate with
+# config-travelled.yaml and rerun the zero-hop and firmware cases against it.
+# EMQX reconnects to the recreated container on its own (auto_reconnect).
+# ---------------------------------------------------------------------------
+if [ $rc -eq 0 ]; then
+    echo "==> Recreating floodgate with zerohop_hop_start: travelled"
+    FLOODGATE_CONFIG=/app/config-travelled.yaml \
+        docker compose -f "$COMPOSE_FILE" up -d --no-deps floodgate >/dev/null
+    for i in $(seq 1 60); do
+        if curl -sf --connect-timeout 2 --max-time 5 -o /dev/null "$HEALTH_URL"; then
+            echo "    floodgate /health ready after ${i}s"; break
+        fi
+        sleep 1
+        [ "$i" -eq 60 ] && { echo "floodgate never came back" >&2; exit 1; }
+    done
+    docker compose -f "$COMPOSE_FILE" logs --no-color floodgate | grep -q "hop_start: travelled" \
+        || { echo "floodgate did not start in travelled mode" >&2; exit 1; }
+    sleep 8
+
+    set +e
+    docker compose -f "$COMPOSE_FILE" run --rm --no-deps \
+        -e CASE_SET=travelled -e HOP_START_MODE=travelled test-driver
+    rc=$?
+    set -e
+    echo "==> travelled exit code: $rc"
+fi
+
 echo "==> Test-driver exit code: $rc"
 
 if [ "$mode" = "run-and-keep" ]; then

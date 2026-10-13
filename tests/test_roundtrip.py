@@ -340,3 +340,28 @@ class TestTracerouteFidelity:
 
         assert after.packet.hop_limit == 0
         assert after.packet.hop_start - after.packet.hop_limit == 7
+
+    def test_travelled_claims_match_the_recorded_route(self, meshtastic_pb2):  # noqa: F811
+        """The same traceroute with `zerohop_hop_start: travelled`: the claim
+        stays 3, equal to the relays recorded, so firmware pads nothing."""
+        mesh_pb2, mqtt_pb2, portnums_pb2 = meshtastic_pb2
+
+        route = mesh_pb2.RouteDiscovery()
+        route.route.extend([0x11111111, 0x22222222, 0x33333333])
+        envelope_bytes = _build_encrypted_envelope(
+            mesh_pb2,
+            mqtt_pb2,
+            portnum=portnums_pb2.PortNum.TRACEROUTE_APP,
+            payload_bytes=route.SerializeToString(),
+            packet_id=PACKET_ID,
+            from_node=FROM_NODE,
+            hop_limit=4,
+            hop_start=7,
+        )
+        modified, old_hop, _meta = zerohop_protobuf(envelope_bytes, "travelled")
+        assert old_hop == 4
+        after = mqtt_pb2.ServiceEnvelope()
+        after.ParseFromString(modified)
+
+        assert after.packet.hop_limit == 0
+        assert after.packet.hop_start - after.packet.hop_limit == len(route.route)

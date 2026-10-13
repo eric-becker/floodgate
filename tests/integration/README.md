@@ -20,7 +20,7 @@ Everything runs on the private `floodgate-test-net` bridge. Only `18083` (EMQX d
 
 ## Passes
 
-`run-integration.sh` runs four passes in order, selecting cases via `CASE_SET`:
+`run-integration.sh` runs five passes in order, selecting cases via `CASE_SET`:
 
 | `CASE_SET` | floodgate | Asserts |
 |---|---|---|
@@ -28,6 +28,7 @@ Everything runs on the private `floodgate-test-net` bridge. Only `18083` (EMQX d
 | `hook-down` | **stopped** | packet delivered **unmodified**, `metrics.failed` rises |
 | `recovery` | restarted | zerohop resumes via `auto_reconnect` |
 | `firmware` | up | a real node **accepts** a zero-hopped packet (0/3); traceroutes are answered with exactly the ghost hops the rule implies, both direct (3) and through two recorded relays (relays + 1) |
+| `travelled` | recreated with `zerohop_hop_start: travelled` | the zero-hop cases again with that mode's values (3/3 → 0/0, 3/1 → 0/2, JSON `hop_start` = `hops_away`); the real node accepts 0/0 and 0/2; traceroutes carry **no** ghosts |
 
 Before any pass, `exhook-init` registers the hook and fails unless EMQX reports every node
 `connected` (EMQX 6 has `node_status[]`, not a top-level `status`).

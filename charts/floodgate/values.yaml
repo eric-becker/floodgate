@@ -27,6 +27,8 @@ config:
     - ShortFast
     - ShortSlow
     - ShortTurbo
+  # keep (as mqtt.meshtastic.org) or travelled; see the floodgate README.
+  zerohop_hop_start: keep
   drop_enabled: false
   drop_channels: "zerohop_channels"
   drop_portnums: []
