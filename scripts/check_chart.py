@@ -7,7 +7,7 @@ Reads `helm template` output on stdin and fails unless:
     rather than as a crash-looping pod;
   - the Deployment carries the checksum/config annotation and uses
     maxUnavailable: 0 -- together these are what keep the old pod serving
-    when a bad config is rolled out (README, "ExHook failure policy").
+    when a bad config is rolled out (docs/operations.md, "Configuration changes").
 
 Usage: helm template floodgate charts/floodgate [--set ...] | scripts/check_chart.py
 """

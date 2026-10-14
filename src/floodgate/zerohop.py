@@ -286,7 +286,7 @@ def zerohop_protobuf(
         # hop_limit 0 stops every downlinking gateway retransmitting on RF.
         # "keep" leaves hop_start as the sender set it, as mqtt.meshtastic.org
         # does; "travelled" keeps hop_start - hop_limit true instead (README,
-        # "How It Works").
+        # "How it works").
         if hop_start_mode == "travelled":
             envelope.packet.hop_start = _hops_travelled(pkt.hop_start, old_hop)
         envelope.packet.hop_limit = 0

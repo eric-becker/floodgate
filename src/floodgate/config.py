@@ -36,7 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ShortSlow",
         "ShortTurbo",
     ],
-    # What zero-hop does to hop_start (README, "How It Works"):
+    # What zero-hop does to hop_start (README, "How it works"):
     #   keep      -- leave it as the sender set it, as mqtt.meshtastic.org does
     #   travelled -- set it to the hops already travelled (hop_start - hop_limit)
     "zerohop_hop_start": "keep",

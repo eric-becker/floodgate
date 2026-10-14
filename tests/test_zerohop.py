@@ -251,7 +251,7 @@ class TestZerohopProtobufHopFields:
     This matches mqtt.meshtastic.org's zero-hop policy. The cost is that
     receivers compute hopsTaken = hop_start - hop_limit = the full hop limit,
     and pad traceroutes with 'Meshtastic ffff (ffff)' for the unrecorded
-    difference (#46; README, "How It Works").
+    difference (#46; README, "How it works").
     """
 
     def test_hop_start_is_left_alone(self):

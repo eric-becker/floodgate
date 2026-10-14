@@ -828,7 +828,7 @@ def case_firmware_traceroute_direct(pub_: Publisher, sub: Subscriber) -> Outcome
     hop_limit` claims but the route does not record. A 3/3 request arrives as
     0/3 with `keep` (as mqtt.meshtastic.org does), so the response carries
     exactly 3 ghosts; with `travelled` it arrives as 0/0 and carries none
-    (#46; README, "How It Works"). Pinning the route makes any change to the
+    (#46; README, "How it works"). Pinning the route makes any change to the
     hop rule show up here.
 
     An unmodified 3/3 packet would show no ghosts, so the case first checks
