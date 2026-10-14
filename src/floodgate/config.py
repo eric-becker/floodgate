@@ -36,6 +36,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ShortSlow",
         "ShortTurbo",
     ],
+    # What zero-hop does to hop_start (README, "How it works"):
+    #   keep      -- leave it as the sender set it, as mqtt.meshtastic.org does
+    #   travelled -- set it to the hops already travelled (hop_start - hop_limit)
+    "zerohop_hop_start": "keep",
     # Drop: deny entirely (EMQX does not deliver). Disabled by default.
     "drop_enabled": False,
     "drop_channels": INHERIT_ZEROHOP_CHANNELS,
@@ -58,6 +62,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "stats_log": True,
 }
 
+ZEROHOP_HOP_START_MODES = ("keep", "travelled")
 _LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _LOG_FORMATS = ("text", "json")
 
@@ -137,6 +142,12 @@ def _validate_values(config: dict[str, Any], errors: list[str]) -> None:
     _check_int(config, "health_port", errors, 1, 65535)
     _check_int(config, "grpc_max_workers", errors, 1)
     _check_int(config, "stats_interval_s", errors, 1)
+
+    mode = config["zerohop_hop_start"]
+    if mode not in ZEROHOP_HOP_START_MODES:
+        errors.append(
+            f"`zerohop_hop_start` must be one of {', '.join(ZEROHOP_HOP_START_MODES)}; got {mode!r}"
+        )
 
     level = config["log_level"]
     if isinstance(level, str) and level.upper() in _LOG_LEVELS:

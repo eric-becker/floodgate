@@ -55,7 +55,7 @@ ruff format --check .      # `ruff format .` to fix
 
 ### Integration testing
 
-The integration harness (`scripts/run-integration.sh`) brings up a full Docker Compose stack — EMQX, floodgate, an ExHook registration container, a real `meshtasticd` node (`mesh-sim`) and a Python test-driver — on an isolated bridge network, and runs four passes: `default` (zerohop, zerohop-multihop, drop, passthru, noop, custom-key-not-dropped, json-zerohop), `hook-down` (floodgate stopped: fails open), `recovery`, and `firmware` (the real node accepts a zero-hopped packet; traceroutes, direct and through recorded relays, are answered with the ghost-hop count the hop rule implies). The test-driver builds `ServiceEnvelope`s with the `meshtastic` Python package's generated protobufs — the same schema as firmware — so each case exercises the wire format floodgate sees in production. See [tests/integration/README.md](tests/integration/README.md) for what each pass proves.
+The integration harness (`scripts/run-integration.sh`) brings up a full Docker Compose stack — EMQX, floodgate, an ExHook registration container, a real `meshtasticd` node (`mesh-sim`) and a Python test-driver — on an isolated bridge network, and runs five passes: `default` (zerohop, zerohop-multihop, drop, passthru, noop, custom-key-not-dropped, json-zerohop), `hook-down` (floodgate stopped: fails open), `recovery`, `firmware` (the real node accepts a zero-hopped packet; traceroutes, direct and through recorded relays, are answered with the ghost-hop count the hop rule implies) and `travelled` (floodgate recreated with `zerohop_hop_start: travelled`; the zero-hop and firmware cases again with that mode's values). The test-driver builds `ServiceEnvelope`s with the `meshtastic` Python package's generated protobufs — the same schema as firmware — so each case exercises the wire format floodgate sees in production. See [tests/integration/README.md](tests/integration/README.md) for what each pass proves.
 
 The `default` cases check both what the subscriber received and floodgate's `/health` deltas; `hook-down` checks EMQX's ExHook `metrics.failed`, `recovery` checks delivered hop fields, and `firmware` checks what the node accepted. One PASS or FAIL line is printed per case.
 
@@ -82,9 +82,10 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`
 
 ## Branching strategy
 
-- `main` — always releasable; releases are tags on `main`
+- `main` — always releasable; releases are tags on `main`. CI publishes `:latest`.
+- `dev` — integration branch. CI publishes `:dev` and `:dev-<sha>` for testing in a staging deployment.
 - Feature branches: `feat/<name>`, `fix/<name>`, `docs/<name>`, `chore/<name>`
-- Branch from `main`, PR back to `main`, squash-merge
+- Branch from `dev`, PR into `dev` (squash-merge), test the `:dev` image, then PR `dev` into `main` (merge commit, so the two branches stay aligned)
 - Delete feature branches after merge (GitHub auto-deletes remote; clean local with `git branch -d`)
 
 ## Release workflow

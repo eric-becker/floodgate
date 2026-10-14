@@ -247,8 +247,13 @@ def _extract_proto_meta(pkt) -> dict:
     return meta
 
 
-def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
+def zerohop_protobuf(
+    payload: bytes, hop_start_mode: str = "keep"
+) -> tuple[bytes | None, int | None, dict]:
     """Zero-hop a protobuf ServiceEnvelope.
+
+    `hop_start_mode` is the `zerohop_hop_start` setting: "keep" leaves
+    hop_start alone, "travelled" sets it to the hops already travelled.
 
     Returns (modified_bytes, original_hop_limit, packet_meta):
       - (None, None, {})  on parse error
@@ -272,13 +277,18 @@ def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
         pkt = envelope.packet
         old_hop = pkt.hop_limit
         logger.debug("zerohop_protobuf: old_hop=%d", old_hop)
+        # Extract before modifying: `pkt` aliases envelope.packet, so reading it
+        # afterwards would log the rewritten hop_start, not the sender's.
         meta = _extract_proto_meta(pkt)
         if old_hop == 0:
             return None, 0, meta
 
         # hop_limit 0 stops every downlinking gateway retransmitting on RF.
-        # hop_start is left as the sender set it, as mqtt.meshtastic.org does
-        # for its zero-hop policy (see README, "How It Works").
+        # "keep" leaves hop_start as the sender set it, as mqtt.meshtastic.org
+        # does; "travelled" keeps hop_start - hop_limit true instead (README,
+        # "How it works").
+        if hop_start_mode == "travelled":
+            envelope.packet.hop_start = _hops_travelled(pkt.hop_start, old_hop)
         envelope.packet.hop_limit = 0
         modified = envelope.SerializeToString()
         logger.debug("zerohop_protobuf: serialized %d bytes", len(modified))
@@ -295,7 +305,9 @@ def zerohop_protobuf(payload: bytes) -> tuple[bytes | None, int | None, dict]:
     return modified, old_hop, meta
 
 
-def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
+def zerohop_json(
+    payload: bytes, hop_start_mode: str = "keep"
+) -> tuple[bytes | None, int | None, dict]:
     """Zero-hop a JSON-encoded Meshtastic packet.
 
     Meshtastic JSON format omits 'hop_limit' and uses 'hops_away' instead:
@@ -354,9 +366,28 @@ def zerohop_json(payload: bytes) -> tuple[bytes | None, int | None, dict]:
     if old_hop == 0:
         return None, 0, meta
 
-    # Same rule as the protobuf path: only hop_limit changes.
+    # Same rule as the protobuf path. Firmware's JSON has no hop_limit; its
+    # hops_away already is the hops travelled, so "travelled" keeps it.
+    if hop_start_mode == "travelled":
+        if "hop_start" in data:
+            travelled = _hops_travelled(data["hop_start"], old_hop)
+        else:
+            travelled = data.get("hops_away")
+        if "hop_start" in data:
+            data["hop_start"] = travelled
+        if "hops_away" in data and travelled is not None:
+            data["hops_away"] = travelled
     data["hop_limit"] = 0
     return _json.dumps(data).encode(), old_hop, meta
+
+
+def _hops_travelled(hop_start: int, hop_limit: int) -> int:
+    """Hops a packet had already taken when it reached MQTT, never negative.
+
+    hop_start is 0 on pre-2.3 firmware, which never set it; a hop_start below
+    hop_limit is malformed. Both yield 0.
+    """
+    return max(0, hop_start - hop_limit)
 
 
 # ---------------------------------------------------------------------------
@@ -448,10 +479,11 @@ def _process_message_inner(topic: str, payload: bytes, config: dict) -> ProcessR
         )
         return ProcessResult.passthru()
 
+    mode = config.get("zerohop_hop_start", "keep")
     if encoding == "json":
-        modified, old_hop, meta = zerohop_json(payload)
+        modified, old_hop, meta = zerohop_json(payload, mode)
     else:
-        modified, old_hop, meta = zerohop_protobuf(payload)
+        modified, old_hop, meta = zerohop_protobuf(payload, mode)
 
     if modified is None and old_hop is None:
         stats.inc("errors")

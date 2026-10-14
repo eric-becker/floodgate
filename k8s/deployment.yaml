@@ -21,7 +21,7 @@ spec:
     spec:
       containers:
         - name: floodgate
-          image: ghcr.io/eric-becker/floodgate:0.7.0
+          image: ghcr.io/eric-becker/floodgate:0.8.0
           ports:
             - containerPort: 9000
               protocol: TCP

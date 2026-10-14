@@ -182,7 +182,8 @@ def _log_startup_policy(config: dict):
         channels = config.get("zerohop_channels", []) or []
         if channels:
             logger.info(
-                "Zerohop ENABLED — zero-hopping packets on: %s",
+                "Zerohop ENABLED (hop_start: %s) — zero-hopping packets on: %s",
+                config.get("zerohop_hop_start", "keep"),
                 ", ".join(channels),
             )
         else:

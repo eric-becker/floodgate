@@ -31,9 +31,12 @@ services:
     ports:
       - "127.0.0.1:18089:8080"
     environment:
-      FLOODGATE_CONFIG: /app/config.yaml
+      # run-integration.sh recreates floodgate with config-travelled.yaml for
+      # the `travelled` pass.
+      FLOODGATE_CONFIG: "${FLOODGATE_CONFIG:-/app/config.yaml}"
     volumes:
       - ./tests/integration/config.yaml:/app/config.yaml:ro
+      - ./tests/integration/config-travelled.yaml:/app/config-travelled.yaml:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 5s
@@ -87,6 +90,8 @@ services:
       # Which case set to run. run-integration.sh overrides this to drive the
       # hook-down / recovery passes; unset means the steady-state cases.
       CASE_SET: "${CASE_SET:-default}"
+      # floodgate's `zerohop_hop_start`, so each case knows what to expect.
+      HOP_START_MODE: "${HOP_START_MODE:-keep}"
       # Read-only ExHook metrics access — the only place a floodgate outage
       # is observable, since floodgate is down and the packet flows normally.
       EMQX_API_URL: "http://emqx:18083"
