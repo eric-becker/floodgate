@@ -82,9 +82,10 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`
 
 ## Branching strategy
 
-- `main` — always releasable; releases are tags on `main`
+- `main` — always releasable; releases are tags on `main`. CI publishes `:latest`.
+- `dev` — integration branch. CI publishes `:dev` and `:dev-<sha>` for testing in a staging deployment.
 - Feature branches: `feat/<name>`, `fix/<name>`, `docs/<name>`, `chore/<name>`
-- Branch from `main`, PR back to `main`, squash-merge
+- Branch from `dev`, PR into `dev` (squash-merge), test the `:dev` image, then PR `dev` into `main` (merge commit, so the two branches stay aligned)
 - Delete feature branches after merge (GitHub auto-deletes remote; clean local with `git branch -d`)
 
 ## Release workflow
