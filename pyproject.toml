@@ -22,7 +22,7 @@ dev = [
     "grpcio-tools>=1.80.0",
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "ruff==0.17.0",   # pinned: CI runs exactly this version, so lint is reproducible
+    "ruff==0.17.3",   # pinned: CI runs exactly this version, so lint is reproducible
 ]
 
 [project.scripts]
