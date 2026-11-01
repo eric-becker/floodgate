@@ -1,5 +1,5 @@
 # Base image pinned by digest (multi-arch index); Dependabot proposes bumps.
-FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f AS builder
+FROM python:3.15-slim@sha256:94d3426f1def7db4a106a232ac121bfd975393e5dfd40a619b955fae45fe7913 AS builder
 
 WORKDIR /build
 
@@ -22,7 +22,7 @@ COPY scripts/generate_protos.sh scripts/
 RUN chmod +x scripts/generate_protos.sh && ./scripts/generate_protos.sh
 
 # runtime
-FROM python:3.13-slim@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f
+FROM python:3.15-slim@sha256:94d3426f1def7db4a106a232ac121bfd975393e5dfd40a619b955fae45fe7913
 
 WORKDIR /app
 
